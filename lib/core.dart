@@ -265,7 +265,6 @@ class TimerStore {
   static Future<void> _arm(ActiveTimer t) async {
     await Notifier.at(idOf(t.slot), DateTime.fromMillisecondsSinceEpoch(t.endMs), notifTitle(t), notifBody(t));
   }
-  }
 
   static Future<ActiveTimer> start({
     required String kind,
@@ -575,8 +574,4 @@ class EmptyState extends StatelessWidget {
 
 Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
       padding: const EdgeInsets.only(bottom: 18),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(t, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-        if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
-      ]),
-    );
+  
