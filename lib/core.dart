@@ -582,3 +582,4 @@ Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
         if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
       ]),
     );
+);
