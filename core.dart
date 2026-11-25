@@ -1,0 +1,582 @@
+import 'dart:convert';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
+import 'extra.dart';
+
+class C {
+  static const bg = Color(0xFF0B0B0D);
+  static const card = Color(0xFF151518);
+  static const accent = Color(0xFF8B7CFF);
+  static const cyan = Color(0xFF06B6D4);
+  static const blue = Color(0xFF3B82F6);
+  static const violet = Color(0xFF6C5CE7);
+  static const orange = Color(0xFFFF9F43);
+  static const green = Color(0xFF34D399);
+}
+
+// ───────── Settings (SharedPreferences) ─────────
+class Prefs {
+  static List<int> intervals = [1, 3, 7, 14, 30, 60];
+  static int revisionMin = 20, studyMin = 70;
+  static bool fridayReview = true, alarms = true;
+  static SharedPreferences? _p;
+
+  static Future<void> init() async {
+    try {
+      _p = await SharedPreferences.getInstance();
+      final s = _p!.getString('intervals');
+      if (s != null) {
+        final l = s.split(',').map((e) => int.tryParse(e.trim())).whereType<int>().where((e) => e > 0).toList();
+        if (l.isNotEmpty) intervals = l;
+      }
+      revisionMin = _p!.getInt('revisionMin') ?? 20;
+      studyMin = _p!.getInt('studyMin') ?? 70;
+      fridayReview = _p!.getBool('fridayReview') ?? true;
+      alarms = _p!.getBool('alarms') ?? true;
+    } catch (_) {}
+  }
+
+  static Future<void> save() async {
+    final p0 = _p;
+    if (p0 == null) return;
+    await p0.setString('intervals', intervals.join(','));
+    await p0.setInt('revisionMin', revisionMin);
+    await p0.setInt('studyMin', studyMin);
+    await p0.setBool('fridayReview', fridayReview);
+    await p0.setBool('alarms', alarms);
+  }
+
+  static int afterNew() => intervals.first;
+  static int afterRevision(int doneBefore) => intervals[math.min(doneBefore + 1, intervals.length - 1)];
+}
+
+// ───────── Alarms / notifications ─────────
+// IDs: 10 = long (study) timer, 11 = short (revision) timer, 2 = test,
+// 1000+topicId = topic revision alarm, 3000+ = daily reminders.
+class Notifier {
+  static final plugin = FlutterLocalNotificationsPlugin();
+  static bool ready = false;
+
+  static const _details = NotificationDetails(
+    android: AndroidNotificationDetails(
+      'study_alarm_v2',
+      'Study alarms',
+      channelDescription: 'Revision and session alarms',
+      importance: Importance.max,
+      priority: Priority.max,
+      category: AndroidNotificationCategory.alarm,
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+      playSound: true,
+      enableVibration: true,
+      enableLights: true,
+      visibility: NotificationVisibility.public,
+      ticker: 'Study alarm',
+    ),
+  );
+
+  // Revision alert per topic: 1000+id = due now (old 5000+/7000+ ids are only cleaned up).
+  static Future<void> scheduleRevision(int topicId, DateTime when, String title, String subject) =>
+      at(1000 + topicId, when, 'Time to revise', '$title · $subject');
+
+  static Future<void> cancelRevision(int topicId) async {
+    await cancel(1000 + topicId);
+    await cancel(5000 + topicId);
+    await cancel(7000 + topicId);
+  }
+
+  static Future<void> init() async {
+    try {
+      tzdata.initializeTimeZones();
+      await plugin.initialize(const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+      ready = true;
+      await requestPermissions();
+    } catch (_) {}
+  }
+
+  static Future<void> requestPermissions() async {
+    try {
+      final a = plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      await a?.requestNotificationsPermission();
+      await a?.requestExactAlarmsPermission();
+    } catch (_) {}
+  }
+
+  static Future<void> at(int id, DateTime when, String title, String body, {bool force = false}) async {
+    if (!ready || (!Prefs.alarms && !force)) return;
+    if (!when.isAfter(DateTime.now())) return;
+    final t = tz.TZDateTime.fromMillisecondsSinceEpoch(tz.UTC, when.millisecondsSinceEpoch);
+    try {
+      await plugin.zonedSchedule(id, title, body, t, _details,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
+    } catch (_) {
+      try {
+        await plugin.zonedSchedule(id, title, body, t, _details,
+            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+            uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> cancel(int id) async {
+    if (!ready) return;
+    try {
+      await plugin.cancel(id);
+    } catch (_) {}
+  }
+
+  static Future<void> cancelAll() async {
+    if (!ready) return;
+    try {
+      await plugin.cancelAll();
+    } catch (_) {}
+  }
+
+  static Future<void> rescheduleAll() async {
+    if (!ready) return;
+    await cancelAll();
+    if (!Prefs.alarms) return;
+    final rows = await AppDb.db.rawQuery(
+        "SELECT t.id, t.title, t.nextRevision, s.name subject FROM topics t JOIN subjects s ON s.id=t.subjectId WHERE t.nextRevision IS NOT NULL");
+    for (final r in rows) {
+      final when = DateTime.tryParse((r['nextRevision'] as String?) ?? '');
+      if (when != null) {
+        await scheduleRevision(r['id'] as int, when, '${r['title']}', '${r['subject']}');
+      }
+    }
+    await TimerStore.rearmAll();
+  }
+}
+
+// ───────── Persistent timers ─────────
+class ActiveTimer {
+  final String slot, kind, title, subject;
+  final int topicId, minutes;
+  int startMs, endMs, remainingMs;
+  bool running;
+
+  ActiveTimer({
+    required this.slot,
+    required this.kind,
+    required this.title,
+    required this.subject,
+    required this.topicId,
+    required this.minutes,
+    required this.startMs,
+    required this.endMs,
+    required this.remainingMs,
+    required this.running,
+  });
+
+  int get totalMs => minutes * 60000;
+
+  int leftMs([int? nowMs]) =>
+      running ? math.max(0, endMs - (nowMs ?? DateTime.now().millisecondsSinceEpoch)) : remainingMs;
+
+  Map<String, dynamic> toJson() => {
+        'slot': slot,
+        'kind': kind,
+        'title': title,
+        'subject': subject,
+        'topicId': topicId,
+        'minutes': minutes,
+        'startMs': startMs,
+        'endMs': endMs,
+        'remainingMs': remainingMs,
+        'running': running,
+      };
+
+  static ActiveTimer? fromJson(String s) {
+    try {
+      final m = jsonDecode(s) as Map<String, dynamic>;
+      return ActiveTimer(
+        slot: m['slot'] as String,
+        kind: m['kind'] as String,
+        title: m['title'] as String,
+        subject: (m['subject'] as String?) ?? '',
+        topicId: (m['topicId'] as num).toInt(),
+        minutes: (m['minutes'] as num).toInt(),
+        startMs: (m['startMs'] as num).toInt(),
+        endMs: (m['endMs'] as num).toInt(),
+        remainingMs: (m['remainingMs'] as num).toInt(),
+        running: m['running'] as bool,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class TimerStore {
+  static SharedPreferences? _p;
+  static bool _busy = false;
+
+  static Future<SharedPreferences> get _prefs async => _p ??= await SharedPreferences.getInstance();
+
+  // 'new' -> long (study) slot; 'revision' and 'friday' -> short slot
+  static String slotOf(String kind) => kind == 'new' ? 'long' : 'short';
+  static int idOf(String slot) => slot == 'long' ? 10 : 11;
+
+  static String notifTitle(ActiveTimer t) => t.kind == 'new'
+      ? 'StudyOS – Study Session Completed'
+      : (t.kind == 'friday' ? 'StudyOS – Friday Review Completed' : 'StudyOS – Revision Completed');
+
+  static String notifBody(ActiveTimer t) => t.kind == 'new'
+      ? 'Your ${t.minutes}-minute study session has finished. Time for a break!'
+      : 'Your ${t.minutes}-minute ${t.kind == 'friday' ? 'review' : 'revision'} session has finished.';
+
+  static Future<ActiveTimer?> get(String slot) async {
+    final p0 = await _prefs;
+    final s = p0.getString('timer_$slot');
+    if (s == null) return null;
+    final t = ActiveTimer.fromJson(s);
+    if (t == null) {
+      await p0.remove('timer_$slot');
+      return null;
+    }
+    // Clock moved backwards while the app was closed: never exceed the full session length.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (t.running && t.endMs - now > t.totalMs + 60000) {
+      t.endMs = now + t.totalMs;
+      await _put(t);
+      await _arm(t);
+    }
+    return t;
+  }
+
+  static Future<void> _put(ActiveTimer t) async {
+    final p0 = await _prefs;
+    await p0.setString('timer_${t.slot}', jsonEncode(t.toJson()));
+  }
+
+  static Future<void> _clear(String slot) async {
+    final p0 = await _prefs;
+    await p0.remove('timer_$slot');
+  }
+
+  // The alarm and the on-screen countdown both use t.endMs.
+  static Future<void> _arm(ActiveTimer t) async {
+    await Notifier.at(idOf(t.slot), DateTime.fromMillisecondsSinceEpoch(t.endMs), notifTitle(t), notifBody(t));
+  }
+  }
+
+  static Future<ActiveTimer> start({
+    required String kind,
+    required int topicId,
+    required String title,
+    required String subject,
+    required int minutes,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final t = ActiveTimer(
+      slot: slotOf(kind),
+      kind: kind,
+      title: title,
+      subject: subject,
+      topicId: topicId,
+      minutes: minutes,
+      startMs: now,
+      endMs: now + minutes * 60000,
+      remainingMs: minutes * 60000,
+      running: true,
+    );
+    await _put(t);
+    await _arm(t);
+    return t;
+  }
+
+  static Future<ActiveTimer?> pause(String slot) async {
+    final t = await get(slot);
+    if (t == null || !t.running) return t;
+    t.remainingMs = t.leftMs();
+    t.running = false;
+    await _put(t);
+    await Notifier.cancel(idOf(slot));
+    await Notifier.cancel(idOf(slot) + 2);
+    return t;
+  }
+
+  static Future<ActiveTimer?> resume(String slot) async {
+    final t = await get(slot);
+    if (t == null || t.running) return t;
+    t.endMs = DateTime.now().millisecondsSinceEpoch + t.remainingMs;
+    t.running = true;
+    await _put(t);
+    await _arm(t);
+    return t;
+  }
+
+  static Future<void> cancel(String slot) async {
+    final t = await get(slot);
+    await _clear(slot);
+    await Notifier.cancel(idOf(slot));
+    await Notifier.cancel(idOf(slot) + 2);
+    
+  }
+
+  // Records the session and schedules the next revision. Safe to call twice.
+  static Future<void> finalize(ActiveTimer t) async {
+    final left = t.leftMs();
+    final early = left > 0;
+    final elapsedMs = t.totalMs - left;
+    final mins = early ? math.min(t.minutes, math.max(1, (elapsedMs / 60000).ceil())) : t.minutes;
+    final startedAt = DateTime.fromMillisecondsSinceEpoch(t.startMs).toIso8601String();
+    final doneAt = early ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch(t.endMs);
+    final db = AppDb.db;
+    final topics = await db.query('topics', where: 'id=?', whereArgs: [t.topicId]);
+    final topic = topics.isEmpty ? null : topics.first;
+    DateTime? next;
+    await db.transaction((txn) async {
+      final dup = await txn.query('sessions',
+          where: 'topicId=? AND kind=? AND startedAt=?', whereArgs: [t.topicId, t.kind, startedAt]);
+      if (dup.isNotEmpty) return;
+      await txn.insert('sessions', {
+        'topicId': t.topicId,
+        'kind': t.kind,
+        'minutes': mins,
+        'startedAt': startedAt,
+        'completed': 1,
+      });
+      if (topic != null && t.kind == 'new') {
+        next = doneAt.add(Duration(days: Prefs.afterNew()));
+        await txn.update('topics',
+            {'completedAt': doneAt.toIso8601String(), 'revisionCount': 0, 'nextRevision': next!.toIso8601String()},
+            where: 'id=?', whereArgs: [t.topicId]);
+      } else if (topic != null && t.kind == 'revision') {
+        final rc = (topic['revisionCount'] as int?) ?? 0;
+        next = doneAt.add(Duration(days: Prefs.afterRevision(rc)));
+        await txn.update('topics', {'revisionCount': rc + 1, 'nextRevision': next!.toIso8601String()},
+            where: 'id=?', whereArgs: [t.topicId]);
+      }
+    });
+    await _clear(t.slot);
+    // A natural finish lets the already-scheduled alarm notify; only an early finish cancels it.
+    await Notifier.cancel(idOf(t.slot) + 2);
+    if (early) {
+      await Notifier.cancel(idOf(t.slot));
+    }
+    final n = next;
+    if (n != null) {
+      await Notifier.cancelRevision(t.topicId);
+      await Notifier.scheduleRevision(t.topicId, n, t.title, t.subject);
+    }
+    await Extra.applyDaily();
+  }
+
+  // Finalizes timers that ended while the app was closed; drops timers of deleted topics.
+  static Future<void> sweep() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      for (final slot in ['long', 'short']) {
+        final t = await get(slot);
+        if (t == null) continue;
+        final exists = await AppDb.db.query('topics', columns: ['id'], where: 'id=?', whereArgs: [t.topicId]);
+        if (exists.isEmpty) {
+          await cancel(slot);
+          continue;
+        }
+        if (t.running && t.leftMs() <= 0) await finalize(t);
+      }
+    } finally {
+      _busy = false;
+    }
+  }
+
+  static Future<void> rearmAll() async {
+    for (final slot in ['long', 'short']) {
+      final t = await get(slot);
+      if (t != null && t.running && t.leftMs() > 0) await _arm(t);
+    }
+  }
+}
+
+// ───────── Database (schema v1 unchanged) ─────────
+class AppDb {
+  static late Database db;
+  static Future<void> init() async {
+    db = await openDatabase(
+      p.join(await getDatabasesPath(), 'recursive_study.db'),
+      version: 1,
+      onCreate: (db, v) async {
+        await db.execute('CREATE TABLE subjects(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
+        await db.execute('''CREATE TABLE topics(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, subjectId INTEGER NOT NULL,
+          title TEXT NOT NULL, notes TEXT DEFAULT '', createdAt TEXT NOT NULL,
+          completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT
+        )''');
+        await db.execute('''CREATE TABLE sessions(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, topicId INTEGER, kind TEXT NOT NULL,
+          minutes INTEGER NOT NULL, startedAt TEXT NOT NULL, completed INTEGER DEFAULT 0
+        )''');
+      },
+    );
+  }
+
+  static Future<void> deleteTopic(int id) async {
+    await db.transaction((txn) async {
+      await txn.delete('sessions', where: 'topicId=?', whereArgs: [id]);
+      await txn.delete('topics', where: 'id=?', whereArgs: [id]);
+    });
+    await Notifier.cancelRevision(id);
+  }
+
+  static Future<void> deleteSubject(int id) async {
+    final ids = await db.query('topics', columns: ['id'], where: 'subjectId=?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.rawDelete('DELETE FROM sessions WHERE topicId IN (SELECT id FROM topics WHERE subjectId=?)', [id]);
+      await txn.delete('topics', where: 'subjectId=?', whereArgs: [id]);
+      await txn.delete('subjects', where: 'id=?', whereArgs: [id]);
+    });
+    for (final r in ids) {
+      await Notifier.cancelRevision(r['id'] as int);
+    }
+  }
+}
+
+// ───────── Helpers / stats ─────────
+String dayKey(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+DateTime dayAgo(DateTime d, int n) => DateTime(d.year, d.month, d.day - n);
+
+int daysFromToday(DateTime d) {
+  final n = DateTime.now();
+  return DateTime.utc(d.year, d.month, d.day).difference(DateTime.utc(n.year, n.month, n.day)).inDays;
+}
+
+String fmtMin(int m) => m < 60 ? '${m}m' : (m % 60 == 0 ? '${m ~/ 60}h' : '${m ~/ 60}h ${m % 60}m');
+
+String kindLabel(String k) => k == 'new' ? 'Study' : (k == 'friday' ? 'Friday review' : 'Revision');
+
+String fmtCountdown(Duration d) {
+  if (d.isNegative) d = Duration.zero;
+  String two(int n) => n.toString().padLeft(2, '0');
+  final days = d.inDays, h = d.inHours % 24, m = d.inMinutes % 60, s = d.inSeconds % 60;
+  if (days > 0) return '${days}d ${two(h)}h ${two(m)}m ${two(s)}s';
+  if (d.inHours > 0) return '${d.inHours}h ${two(m)}m ${two(s)}s';
+  return '${two(m)}m ${two(s)}s';
+}
+
+class Stats {
+  int streak = 0, todayMin = 0, todaySessions = 0, totalMin = 0, totalSessions = 0, revisionSessions = 0;
+  List<int> week = List.filled(7, 0);
+  List<DateTime> weekDays = [];
+
+  static Future<Stats> load() async {
+    final s = Stats();
+    final rows = await AppDb.db.rawQuery(
+        "SELECT substr(startedAt,1,10) d, SUM(minutes) m, COUNT(*) c FROM sessions WHERE completed=1 GROUP BY d");
+    final mins = <String, int>{};
+    final cnt = <String, int>{};
+    for (final r in rows) {
+      final d = r['d'] as String?;
+      if (d == null) continue;
+      final m = (r['m'] as num?)?.toInt() ?? 0;
+      final c = (r['c'] as num?)?.toInt() ?? 0;
+      mins[d] = m;
+      cnt[d] = c;
+      s.totalMin += m;
+      s.totalSessions += c;
+    }
+    final today = DateTime.now();
+    s.todayMin = mins[dayKey(today)] ?? 0;
+    s.todaySessions = cnt[dayKey(today)] ?? 0;
+    var d = mins.containsKey(dayKey(today)) ? today : dayAgo(today, 1);
+    while (mins.containsKey(dayKey(d))) {
+      s.streak++;
+      d = dayAgo(d, 1);
+    }
+    s.weekDays = List.generate(7, (i) => dayAgo(today, 6 - i));
+    s.week = s.weekDays.map((x) => mins[dayKey(x)] ?? 0).toList();
+    s.revisionSessions = Sqflite.firstIntValue(await AppDb.db
+            .rawQuery("SELECT COUNT(*) FROM sessions WHERE completed=1 AND kind IN ('revision','friday')")) ??
+        0;
+    return s;
+  }
+}
+
+// ───────── Shared widgets ─────────
+Future<bool> confirmDialog(BuildContext context, String title, String body, String action) async {
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
+      ],
+    ),
+  );
+  return r == true;
+}
+
+class Panel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets padding;
+  final VoidCallback? onTap, onLongPress;
+  const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.onTap, this.onLongPress});
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(20);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: C.card,
+        borderRadius: r,
+        child: InkWell(
+          borderRadius: r,
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(borderRadius: r, border: Border.all(color: Colors.white.withOpacity(0.06))),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class IconBadge extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const IconBadge(this.icon, this.color, {super.key});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(color: color.withOpacity(0.16), borderRadius: BorderRadius.circular(14)),
+        child: Icon(icon, color: color, size: 22),
+      );
+}
+
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const EmptyState(this.icon, this.text, {super.key});
+  @override
+  Widget build(BuildContext context) => Panel(
+        padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 18),
+        child: Row(children: [
+          Icon(icon, color: Colors.white38),
+          const SizedBox(width: 14),
+          Expanded(child: Text(text, style: const TextStyle(color: Colors.white54))),
+        ]),
+      );
+}
+
+Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(t, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+        if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
+      ]),
+    );
