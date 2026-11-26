@@ -197,6 +197,11 @@ class _DashboardState extends State<Dashboard> {
                 Text(t['title'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 3),
                 Text('${t['subject']}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                if (((t['notes'] as String?) ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(((t['notes'] as String?) ?? '').trim(),
+                      maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                ],
               ]),
             ),
             Text(fmtCountdown(left), style: const TextStyle(fontWeight: FontWeight.w700, color: C.cyan, fontSize: 13)),
@@ -242,6 +247,11 @@ class _DashboardState extends State<Dashboard> {
             Text(t['title'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 3),
             Text('${t['subject']}  ·  ${kindLabel(kind)}  ·  $sub', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+            if (((t['notes'] as String?) ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(((t['notes'] as String?) ?? '').trim(),
+                  maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            ],
           ]),
         ),
         Container(
@@ -279,6 +289,7 @@ class _DashboardState extends State<Dashboard> {
     widget.onChanged();
   }
 }
+
 
 // ───────────────────────── Subjects ─────────────────────────
 Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<String, dynamic>? topic}) async {
