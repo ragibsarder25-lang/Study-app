@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'core.dart';
 import 'extra.dart';
+import 'plan_ui.dart';
 
 class ProgressPage extends StatefulWidget {
   const ProgressPage({super.key});
@@ -65,6 +66,7 @@ class _ProgressPageState extends State<ProgressPage> {
           const SizedBox(width: 10),
           stat(Icons.replay, C.green, 'Revisions', '${stats.revisionSessions}'),
         ]),
+        const ForecastCard(),
         Panel(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Last 7 days', style: TextStyle(fontWeight: FontWeight.w600)),
