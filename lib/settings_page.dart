@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'backup.dart';
 import 'core.dart';
 import 'extra.dart';
+import 'plan_ui.dart';
 
 class SettingsPage extends StatefulWidget {
   final VoidCallback onChanged;
@@ -79,7 +80,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(20), children: [
-      pageTitle(context, 'Settings', 'Timers, alarms and look'),
+      pageTitle(context, 'Settings', 'Timers, adaptive rules, alarms and look'),
       Panel(
         child: Column(children: [
           stepper('Study session', Prefs.studyMin, 5, 5, 180, (v) => Prefs.studyMin = v),
@@ -98,6 +99,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ]),
       ),
+      PlanSettings(onChanged: widget.onChanged),
       Panel(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Column(children: [
