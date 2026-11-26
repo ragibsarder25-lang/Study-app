@@ -17,12 +17,24 @@ class Backup {
     await JobDb.ensure();
     final data = <String, dynamic>{
       'app': 'recursive_study',
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
     };
     for (final t in tables) {
       data[t] = await AppDb.db.query(t);
     }
+    data['settings'] = {
+      'intervals': Prefs.intervals,
+      'revisionMin': Prefs.revisionMin,
+      'studyMin': Prefs.studyMin,
+      'fridayReview': Prefs.fridayReview,
+      'alarms': Prefs.alarms,
+      'accent': Extra.accent.value,
+      'dailyReminder': Extra.dailyReminder,
+      'reminderHour': Extra.reminderHour,
+      'reminderMinute': Extra.reminderMinute,
+    };
+    data['timers'] = await TimerStore.exportRaw();
     return const JsonEncoder.withIndent(' ').convert(data);
   }
 
@@ -81,6 +93,10 @@ class Backup {
     List<Map<String, dynamic>> rows(String t) =>
         ((m[t] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
     final parsed = {for (final t in tables) t: rows(t)}; // validate everything before touching data
+    final settings = m['settings'] is Map ? Map<String, dynamic>.from(m['settings'] as Map) : null;
+    final timers = m['timers'] is Map
+        ? <String, String>{for (final e in (m['timers'] as Map).entries) '${e.key}': '${e.value}'}
+        : null;
 
     await JobDb.ensure();
     await TimerStore.cancel('long');
@@ -95,7 +111,31 @@ class Backup {
         }
       }
     });
+    if (settings != null) await _applySettings(settings);
+    if (timers != null && timers.isNotEmpty) {
+      await TimerStore.importRaw(timers);
+      await TimerStore.sweep();
+    }
     await Notifier.rescheduleAll();
     await Extra.applyDaily();
+  }
+
+  static Future<void> _applySettings(Map<String, dynamic> s) async {
+    int? i(String k) => s[k] is num ? (s[k] as num).toInt() : null;
+    bool? b(String k) => s[k] is bool ? s[k] as bool : null;
+    final iv = s['intervals'] is List
+        ? (s['intervals'] as List).whereType<num>().map((e) => e.toInt()).where((e) => e > 0).toList()
+        : <int>[];
+    if (iv.isNotEmpty) Prefs.intervals = iv;
+    Prefs.revisionMin = (i('revisionMin') ?? Prefs.revisionMin).clamp(5, 120).toInt();
+    Prefs.studyMin = (i('studyMin') ?? Prefs.studyMin).clamp(5, 180).toInt();
+    Prefs.fridayReview = b('fridayReview') ?? Prefs.fridayReview;
+    Prefs.alarms = b('alarms') ?? Prefs.alarms;
+    Extra.accent.value = (i('accent') ?? Extra.accent.value).clamp(0, Extra.palette.length - 1).toInt();
+    Extra.dailyReminder = b('dailyReminder') ?? Extra.dailyReminder;
+    Extra.reminderHour = (i('reminderHour') ?? Extra.reminderHour).clamp(0, 23).toInt();
+    Extra.reminderMinute = (i('reminderMinute') ?? Extra.reminderMinute).clamp(0, 59).toInt();
+    await Prefs.save();
+    await Extra.save();
   }
 }
