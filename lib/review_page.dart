@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'core.dart';
+import 'plan_ui.dart';
+import 'planner.dart';
 
 /// To rate (sessions without stars), Needs review (latest rating 3 or less) and Finished.
 class ReviewPage extends StatefulWidget {
@@ -26,7 +28,7 @@ class _ReviewPageState extends State<ReviewPage> {
     unrated = await db.rawQuery(
         "SELECT x.id, x.kind, x.startedAt, t.title, s.name subject FROM sessions x "
         "JOIN topics t ON t.id=x.topicId JOIN subjects s ON s.id=t.subjectId "
-        "WHERE x.completed=1 AND x.rating IS NULL ORDER BY x.startedAt DESC LIMIT 50");
+        "WHERE x.completed=1 AND x.rating IS NULL AND x.kind IN ${Plan.kindsSql} ORDER BY x.startedAt DESC LIMIT 50");
     final rated = await db.rawQuery(
         "SELECT x.id sid, x.topicId, x.kind, x.rating, t.title, t.finished, s.name subject FROM sessions x "
         "JOIN topics t ON t.id=x.topicId JOIN subjects s ON s.id=t.subjectId "
@@ -62,11 +64,10 @@ class _ReviewPageState extends State<ReviewPage> {
   }
 
   Future<void> _rate(int sessionId, String title, {int initial = 0}) async {
-    final r = await rateDialog(context, title, initial: initial);
-    if (r != null) {
-      await AppDb.setRating(sessionId, r);
-      await load();
-    }
+    final k = await AppDb.db.query('sessions', columns: ['kind'], where: 'id=?', whereArgs: [sessionId]);
+    if (k.isEmpty || !mounted) return;
+    final ok = await rateSession(context, sessionId, title, '${k.first['kind']}', initial: initial);
+    if (ok) await load();
   }
 
   Future<void> _lowActions(Map<String, dynamic> t) async {
