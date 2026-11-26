@@ -39,23 +39,26 @@ class Extra {
     await p.setInt('reminderMinute', reminderMinute);
   }
 
-  /// Schedules the next 7 daily reminders (ids 3000-3006).
+  /// How many days ahead reminders are scheduled (ids 3000+i daily, 3100+i Friday).
+  static const horizonDays = 30;
+
+  /// Schedules daily reminders for the next [horizonDays] days. Refreshed on every app open.
   static Future<void> applyDaily() async {
-    for (var i = 0; i < 7; i++) {
+    for (var i = 0; i < horizonDays; i++) {
       await Notifier.cancel(3000 + i);
       await Notifier.cancel(3100 + i);
     }
     await Notifier.cancel(3200);
     final now = DateTime.now();
     if (dailyReminder) {
-      for (var i = 0; i < 7; i++) {
+      for (var i = 0; i < horizonDays; i++) {
         final d = DateTime(now.year, now.month, now.day + i, reminderHour, reminderMinute);
         await Notifier.at(3000 + i, d, 'StudyOS – Daily reminder', 'Time to study and review your topics.', force: true);
       }
     }
     // Friday full-review reminder, 5 PM on each upcoming Friday.
     if (Prefs.fridayReview) {
-      for (var i = 0; i < 7; i++) {
+      for (var i = 0; i < horizonDays; i++) {
         final d = DateTime(now.year, now.month, now.day + i, 17, 0);
         if (d.weekday == DateTime.friday) {
           await Notifier.at(3100 + i, d, 'StudyOS – Friday review', 'Time for your full weekly review.');
