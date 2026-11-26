@@ -18,7 +18,7 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
-  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
+  List> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
   int pendingRate = 0;
   List<ActiveTimer> active = [];
   Stats stats = Stats();
@@ -290,9 +290,9 @@ class _DashboardState extends State<Dashboard> {
 
   final Set<String> collapsed = {};
 
-  Widget _section(String title, List<Map<String, dynamic>> items, String kind, String emptyText) {
+  Widget _section(String title, List> items, String kind, String emptyText) {
     // Group by subject, keeping the order in which each subject first appears.
-    final groups = <String, List<Map<String, dynamic>>>{};
+    final groups = <String, List>>{};
     for (final t in items) {
       groups.putIfAbsent('${t['subject']}', () => []).add(t);
     }
@@ -303,7 +303,7 @@ class _DashboardState extends State<Dashboard> {
     ]);
   }
 
-  Widget _group(String kind, String subject, List<Map<String, dynamic>> list) {
+  Widget _group(String kind, String subject, List> list) {
     final key = '$kind|$subject';
     final open = !collapsed.contains(key);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -396,7 +396,6 @@ class _DashboardState extends State<Dashboard> {
     widget.onChanged();
   }
 }
-
 // ───────────────────────── Subjects ─────────────────────────
 Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<String, dynamic>? topic}) async {
   final title = TextEditingController(text: (topic?['title'] ?? '') as String);
@@ -453,7 +452,8 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
               changed = true;
               if (ctx.mounted) Navigator.pop(ctx);
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),          ),
+            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+          ),
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
         FilledButton(
           onPressed: () async {
@@ -498,7 +498,7 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
   );
   return changed;
 }
-        class SubjectsPage extends StatefulWidget {
+class SubjectsPage extends StatefulWidget {
   final VoidCallback onChanged;
   const SubjectsPage({super.key, required this.onChanged});
   @override
@@ -506,7 +506,7 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
 }
 
 class _SubjectsPageState extends State<SubjectsPage> {
-  List<Map<String, dynamic>> subjects = [];
+  List> subjects = [];
   @override
   void initState() {
     super.initState();
@@ -639,7 +639,7 @@ class TopicList extends StatefulWidget {
 }
 
 class _TopicListState extends State<TopicList> {
-  List<Map<String, dynamic>> topics = [];
+  List> topics = [];
   @override
   void initState() {
     super.initState();
