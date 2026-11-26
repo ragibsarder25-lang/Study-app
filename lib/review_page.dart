@@ -124,7 +124,7 @@ class _ReviewPageState extends State<ReviewPage> {
       out.addAll(g.map(_unratedTile));
     }
     return out;
-  }
+  } 
 
   Widget _unratedTile(Map<String, dynamic> r) {
     final at = DateTime.tryParse('${r['startedAt']}');
