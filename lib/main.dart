@@ -3,6 +3,7 @@ import 'core.dart';
 import 'pages.dart';
 import 'settings_page.dart';
 import 'extra.dart';
+import 'jobs_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,6 +74,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final pages = [
       Dashboard(onChanged: refresh),
       SubjectsPage(onChanged: refresh),
+      const JobsPage(),
       const ProgressPage(),
       SettingsPage(onChanged: refresh),
     ];
@@ -84,6 +86,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'Today'),
           NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book), label: 'Subjects'),
+          NavigationDestination(icon: Icon(Icons.work_outline), selectedIcon: Icon(Icons.work), label: 'Jobs'),
           NavigationDestination(icon: Icon(Icons.insights_outlined), selectedIcon: Icon(Icons.insights), label: 'Progress'),
           NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune), label: 'Settings'),
         ],
