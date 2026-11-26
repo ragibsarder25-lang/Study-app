@@ -18,7 +18,7 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
-  List> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
+  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
   int pendingRate = 0;
   List<ActiveTimer> active = [];
   Stats stats = Stats();
@@ -237,7 +237,8 @@ class _DashboardState extends State<Dashboard> {
       ...upcoming.map((t) {
         final d = daysFromToday(DateTime.parse(t['nextRevision'] as String));
         final when = d <= 0 ? 'Today' : (d == 1 ? 'Tomorrow' : 'In ${d}d');
-        return Panel(
+
+                return Panel(
           child: Row(children: [
             const IconBadge(Icons.hourglass_bottom_rounded, C.cyan),
             const SizedBox(width: 14),
@@ -290,9 +291,9 @@ class _DashboardState extends State<Dashboard> {
 
   final Set<String> collapsed = {};
 
-  Widget _section(String title, List> items, String kind, String emptyText) {
+  Widget _section(String title, List<Map<String, dynamic>> items, String kind, String emptyText) {
     // Group by subject, keeping the order in which each subject first appears.
-    final groups = <String, List>>{};
+    final groups = <String, List<Map<String, dynamic>>>{};
     for (final t in items) {
       groups.putIfAbsent('${t['subject']}', () => []).add(t);
     }
@@ -303,7 +304,7 @@ class _DashboardState extends State<Dashboard> {
     ]);
   }
 
-  Widget _group(String kind, String subject, List> list) {
+  Widget _group(String kind, String subject, List<Map<String, dynamic>> list) {
     final key = '$kind|$subject';
     final open = !collapsed.contains(key);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -476,7 +477,8 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   final cap = DateTime(n.year, n.month, n.day + 1);
                   final cur = DateTime.tryParse((topic['nextRevision'] as String?) ?? '');
                   if (cur == null || cur.isAfter(cap)) upd['nextRevision'] = cap.toIso8601String();
-                }
+
+                                  }
                 await AppDb.db.update('topics', upd, where: 'id=?', whereArgs: [topic['id']]);
                 if (daily != wasDaily) await Notifier.rescheduleAll(); // add/remove its alarm
                 if (finishedFlag != wasFinished) {
@@ -506,7 +508,7 @@ class SubjectsPage extends StatefulWidget {
 }
 
 class _SubjectsPageState extends State<SubjectsPage> {
-  List> subjects = [];
+  List<Map<String, dynamic>> subjects = [];
   @override
   void initState() {
     super.initState();
@@ -639,7 +641,7 @@ class TopicList extends StatefulWidget {
 }
 
 class _TopicListState extends State<TopicList> {
-  List> topics = [];
+  List<Map<String, dynamic>> topics = [];
   @override
   void initState() {
     super.initState();
