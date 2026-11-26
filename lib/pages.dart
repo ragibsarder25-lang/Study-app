@@ -468,4 +468,152 @@ class _SubjectsPageState extends State<SubjectsPage> {
                         if (ctx.mounted) Navigator.pop(ctx);
                         load();
                       },
-                      child: const 
+                                            child: const Text('Save'))
+                ]));
+  }
+
+  Future<void> subjectMenu(Map<String, dynamic> s) async {
+    final choice = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Rename'), onTap: () => Navigator.pop(ctx, 'rename')),
+              ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  title: const Text('Delete subject', style: TextStyle(color: Colors.redAccent)),
+                  onTap: () => Navigator.pop(ctx, 'delete')),
+            ])));
+    if (choice == 'rename') {
+      await renameSubject(s);
+    } else if (choice == 'delete') {
+      if (!mounted) return;
+      final ok = await confirmDialog(context, 'Delete "${s['name']}"?', 'All its topics and sessions will be removed.', 'Delete');
+      if (ok) {
+        await AppDb.deleteSubject(s['id'] as int);
+        await load();
+      }
+    }
+  }
+
+  Future<void> addTopic(int subjectId) async {
+    final changed = await topicDialog(context, subjectId: subjectId);
+    if (changed) await load();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        floatingActionButton: FloatingActionButton(onPressed: addSubject, child: const Icon(Icons.add)),
+        body: ListView(padding: const EdgeInsets.fromLTRB(20, 20, 20, 90), children: [
+          pageTitle(context, 'Subjects', 'Tap to open · long-press for options'),
+          if (subjects.isEmpty) const EmptyState(Icons.menu_book_outlined, 'No subjects yet. Tap + to add one.'),
+          ...subjects.map((s) {
+            final total = (s['total'] as num?)?.toInt() ?? 0;
+            final done = (s['done'] as num?)?.toInt() ?? 0;
+            return Panel(
+              onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => TopicList(subject: s)));
+                load();
+              },
+              onLongPress: () => subjectMenu(s),
+              child: Row(children: [
+                const IconBadge(Icons.menu_book_outlined, C.accent),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(s['name'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text('$total topics  ·  $done studied', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(value: total == 0 ? 0 : done / total, minHeight: 5),
+                    ),
+                  ]),
+                ),
+                IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => addTopic(s['id'] as int)),
+              ]),
+            );
+          }),
+        ]),
+      );
+}
+
+class TopicList extends StatefulWidget {
+  final Map<String, dynamic> subject;
+  const TopicList({super.key, required this.subject});
+  @override
+  State<TopicList> createState() => _TopicListState();
+}
+
+class _TopicListState extends State<TopicList> {
+  List<Map<String, dynamic>> topics = [];
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    topics = await AppDb.db.query('topics', where: 'subjectId=?', whereArgs: [widget.subject['id']], orderBy: 'createdAt DESC');
+    if (mounted) setState(() {});
+  }
+
+  String status(Map<String, dynamic> t) {
+    final next = t['nextRevision'] as String?;
+    if (next == null) return 'Not studied yet';
+    final d = daysFromToday(DateTime.parse(next));
+    if (d < 0) return 'Revision overdue ${-d}d';
+    if (d == 0) return 'Revision due today';
+    return 'Next revision: ${DateFormat('MMM d').format(DateTime.parse(next))}';
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: Text(widget.subject['name'] as String)),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () async {
+            if (await topicDialog(context, subjectId: widget.subject['id'] as int)) await load();
+          },
+          child: const Icon(Icons.add),
+        ),
+        body: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 90),
+          itemCount: topics.isEmpty ? 1 : topics.length,
+          itemBuilder: (_, i) {
+            if (topics.isEmpty) return const EmptyState(Icons.library_add_outlined, 'No topics yet. Tap + to add one.');
+            final t = topics[i];
+            final next = t['nextRevision'] as String?;
+            final overdue = next != null && daysFromToday(DateTime.parse(next)) <= 0;
+            final notes = (t['notes'] as String?) ?? '';
+            final rc = (t['revisionCount'] as int?) ?? 0;
+            return Panel(
+              onTap: () async {
+                if (await topicDialog(context, subjectId: widget.subject['id'] as int, topic: t)) await load();
+              },
+              child: Row(children: [
+                IconBadge(next == null ? Icons.fiber_new_outlined : (overdue ? Icons.refresh_rounded : Icons.check_circle_outline),
+                    next == null ? C.accent : (overdue ? C.orange : C.green)),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(t['title'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text(status(t), style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                    if (notes.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(notes, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    ],
+                  ]),
+                ),
+                if (next != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
+                    child: Text(((t['daily'] as num?)?.toInt() ?? 0) == 1 ? 'Daily' : 'R$rc', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                  ),
+              ]),
+            );
+          },
+        ),
+      );
+}
