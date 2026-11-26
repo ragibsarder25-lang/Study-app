@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'core.dart';
+import 'plan_ui.dart';
+import 'planner.dart';
 
 class RingPainter extends CustomPainter {
   final double remaining;
@@ -121,8 +123,9 @@ class _TimerPageState extends State<TimerPage> {
     if (cur == null) return;
     done = true;
     ticker?.cancel();
-    await TimerStore.finalize(cur);
+    final sid = await TimerStore.finalize(cur);
     HapticFeedback.heavyImpact();
+    await _rate(sid);
     if (mounted) Navigator.pop(context, true);
   }
 
@@ -141,9 +144,16 @@ class _TimerPageState extends State<TimerPage> {
             title: widget.title,
             subject: widget.subject,
             minutes: widget.minutes);
-    await TimerStore.finalize(cur);
+    final sid = await TimerStore.finalize(cur);
     HapticFeedback.heavyImpact();
+    await _rate(sid);
     if (mounted) Navigator.pop(context, true);
+  }
+
+  // Difficulty (study) / recall (revision) stars. "Later" skips; a reminder notification is already set.
+  Future<void> _rate(int? sid) async {
+    if (sid == null || !mounted || !Plan.wants(widget.kind)) return;
+    await rateSession(context, sid, widget.title, widget.kind);
   }
 
   Future<void> reset() async {
