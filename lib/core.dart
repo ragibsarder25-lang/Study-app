@@ -136,7 +136,10 @@ class Notifier {
   static Future<void> rescheduleAll() async {
     if (!ready) return;
     await cancelAll();
-    if (!Prefs.alarms) return;
+    if (!Prefs.alarms) {
+      await TimerStore.rearmAll(); // timer alarms always ring, even with Alarms off
+      return;
+    }
     final rows = await AppDb.db.rawQuery(
         "SELECT t.id, t.title, t.nextRevision, s.name subject FROM topics t JOIN subjects s ON s.id=t.subjectId WHERE t.nextRevision IS NOT NULL AND COALESCE(t.daily,0)=0");
     for (final r in rows) {
@@ -264,8 +267,15 @@ class TimerStore {
   }
 
   // The alarm and the on-screen countdown both use t.endMs.
+  // force: true -> timer alarms ring even when the Alarms switch is off.
   static Future<void> _arm(ActiveTimer t) async {
-    await Notifier.at(idOf(t.slot), DateTime.fromMillisecondsSinceEpoch(t.endMs), notifTitle(t), notifBody(t));
+    await Notifier.at(
+      idOf(t.slot),
+      DateTime.fromMillisecondsSinceEpoch(t.endMs),
+      notifTitle(t),
+      notifBody(t),
+      force: true,
+    );
   }
 
   static Future<ActiveTimer> start({
@@ -539,13 +549,14 @@ class Stats {
     }
     s.weekDays = List.generate(7, (i) => dayAgo(today, 6 - i));
     s.week = s.weekDays.map((x) => mins[dayKey(x)] ?? 0).toList();
-    s.revisionSessions = Sqflite.firstIntValue(await AppDb.db
+    s.revisionSessions = Sqflite.firstIntValue(await    s.revisionSessions = Sqflite.firstIntValue(await AppDb.db
             .rawQuery("SELECT COUNT(*) FROM sessions WHERE completed=1 AND kind IN ('revision','friday')")) ??
         0;
     return s;
   }
 }
 
+// ───────── Shared widgets ─────────
 Future<bool> confirmDialog(BuildContext context, String title, String body, String action) async {
   final r = await showDialog<bool>(
     context: context,
