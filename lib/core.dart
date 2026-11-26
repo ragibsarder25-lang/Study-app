@@ -121,7 +121,7 @@ class Notifier {
     await cancelAll();
     if (!Prefs.alarms) return;
     final rows = await AppDb.db.rawQuery(
-        "SELECT t.id, t.title, t.nextRevision, s.name subject FROM topics t JOIN subjects s ON s.id=t.subjectId WHERE t.nextRevision IS NOT NULL");
+        "SELECT t.id, t.title, t.nextRevision, s.name subject FROM topics t JOIN subjects s ON s.id=t.subjectId WHERE t.nextRevision IS NOT NULL AND COALESCE(t.daily,0)=0");
     for (final r in rows) {
       final when = DateTime.tryParse((r['nextRevision'] as String?) ?? '');
       if (when != null) {
@@ -319,13 +319,13 @@ class TimerStore {
         'completed': 1,
       });
       if (topic != null && t.kind == 'new') {
-        next = doneAt.add(Duration(days: Prefs.afterNew()));
+        next = _isDaily(topic) ? _startOfTomorrow(doneAt) : doneAt.add(Duration(days: Prefs.afterNew()));
         await txn.update('topics',
             {'completedAt': doneAt.toIso8601String(), 'revisionCount': 0, 'nextRevision': next!.toIso8601String()},
             where: 'id=?', whereArgs: [t.topicId]);
       } else if (topic != null && t.kind == 'revision') {
         final rc = (topic['revisionCount'] as int?) ?? 0;
-        next = doneAt.add(Duration(days: Prefs.afterRevision(rc)));
+        next = _nextAfterRevision(topic, rc, doneAt);
         await txn.update('topics', {'revisionCount': rc + 1, 'nextRevision': next!.toIso8601String()},
             where: 'id=?', whereArgs: [t.topicId]);
       }
@@ -339,9 +339,27 @@ class TimerStore {
     final n = next;
     if (n != null) {
       await Notifier.cancelRevision(t.topicId);
-      await Notifier.scheduleRevision(t.topicId, n, t.title, t.subject);
+      // Daily topics are covered by the daily reminder; no per-topic alarm.
+      if (!_isDaily(topic)) await Notifier.scheduleRevision(t.topicId, n, t.title, t.subject);
     }
     await Extra.applyDaily();
+  }
+
+  static bool _isDaily(Map<String, dynamic>? t) => ((t?['daily'] as num?)?.toInt() ?? 0) == 1;
+  static DateTime _startOfTomorrow(DateTime d) => DateTime(d.year, d.month, d.day + 1);
+
+  // Next revision date after a revision is done.
+  // - Daily topics: always tomorrow.
+  // - Otherwise the interval is counted from the day it was DUE, not the day it was done,
+  //   so a late revision does not push the whole schedule back.
+  // - Missed revisions never pile up: if the result is already in the past, it becomes
+  //   a single revision tomorrow.
+  static DateTime _nextAfterRevision(Map<String, dynamic> topic, int rc, DateTime doneAt) {
+    if (_isDaily(topic)) return _startOfTomorrow(doneAt);
+    final due = DateTime.tryParse((topic['nextRevision'] as String?) ?? '');
+    final anchor = (due != null && due.isBefore(doneAt)) ? due : doneAt;
+    final next = anchor.add(Duration(days: Prefs.afterRevision(rc)));
+    return next.isAfter(doneAt) ? next : _startOfTomorrow(doneAt);
   }
 
   // Finalizes timers that ended while the app was closed; drops timers of deleted topics.
@@ -370,19 +388,27 @@ class TimerStore {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}// ───────── Database (schema v1 unchanged) ─────────
+}
+
+// ───────── Database (schema v2: topics.daily) ─────────
 class AppDb {
   static late Database db;
   static Future<void> init() async {
     db = await openDatabase(
       p.join(await getDatabasesPath(), 'recursive_study.db'),
-      version: 1,
+      version: 2,
+      onUpgrade: (db, oldV, newV) async {
+        if (oldV < 2) {
+          await db.execute('ALTER TABLE topics ADD COLUMN daily INTEGER DEFAULT 0');
+        }
+      },
       onCreate: (db, v) async {
         await db.execute('CREATE TABLE subjects(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)');
         await db.execute('''CREATE TABLE topics(
           id INTEGER PRIMARY KEY AUTOINCREMENT, subjectId INTEGER NOT NULL,
           title TEXT NOT NULL, notes TEXT DEFAULT '', createdAt TEXT NOT NULL,
-          completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT
+          completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT,
+          daily INTEGER DEFAULT 0
         )''');
         await db.execute('''CREATE TABLE sessions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, topicId INTEGER, kind TEXT NOT NULL,
