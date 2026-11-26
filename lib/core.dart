@@ -59,7 +59,8 @@ class Prefs {
 
 // ───────── Alarms / notifications ─────────
 // IDs: 10 = long (study) timer, 11 = short (revision) timer, 2 = test,
-// 1000+topicId = topic revision alarm, 3000+ = daily reminders.
+// 1000+topicId = topic revision alarm, 3000+ = daily reminders,
+// 100000+ = job application alarms.
 class Notifier {
   static final plugin = FlutterLocalNotificationsPlugin();
   static bool ready = false;
@@ -72,6 +73,22 @@ class Notifier {
     await cancel(1000 + topicId);
     await cancel(5000 + topicId);
     await cancel(7000 + topicId);
+  }
+
+  // Job application alarms: 100000 + jobId*2 (+0 = evening before, +1 = morning of).
+  static int _jobId(int id, int k) => 100000 + id * 2 + k;
+
+  static Future<void> cancelJob(int id) async {
+    await cancel(_jobId(id, 0));
+    await cancel(_jobId(id, 1));
+  }
+
+  static Future<void> scheduleJob(int id, String title, String org, String status, DateTime? date) async {
+    await cancelJob(id);
+    if (date == null || status == 'Selected' || status == 'Rejected') return;
+    final body = org.isEmpty ? title : '$title · $org';
+    await at(_jobId(id, 0), DateTime(date.year, date.month, date.day - 1, 18, 0), '$status tomorrow', body);
+    await at(_jobId(id, 1), DateTime(date.year, date.month, date.day, 8, 0), '$status today', body);
   }
 
   static Future<void> init() async {
@@ -128,6 +145,14 @@ class Notifier {
         await scheduleRevision(r['id'] as int, when, '${r['title']}', '${r['subject']}');
       }
     }
+    try {
+      final jobs = await AppDb.db.rawQuery(
+          "SELECT id, title, org, status, deadline FROM job_applications WHERE deadline IS NOT NULL");
+      for (final j in jobs) {
+        await scheduleJob(j['id'] as int, '${j['title']}', '${j['org'] ?? ''}', '${j['status']}',
+            DateTime.tryParse('${j['deadline']}'));
+      }
+    } catch (_) {} // table not created yet
     await TimerStore.rearmAll();
   }
 }
