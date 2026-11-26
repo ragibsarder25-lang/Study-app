@@ -53,6 +53,7 @@ class _TimerPageState extends State<TimerPage> {
   ActiveTimer? t;
   Timer? ticker;
   bool done = false;
+  String notes = '';
 
   String get slot => TimerStore.slotOf(widget.kind);
   int get totalMs => (t?.minutes ?? widget.minutes) * 60000;
@@ -70,6 +71,10 @@ class _TimerPageState extends State<TimerPage> {
   Future<void> _init() async {
     final cur = await TimerStore.get(slot);
     if (cur != null && cur.topicId == widget.topicId && cur.kind == widget.kind) t = cur;
+    try {
+      final r = await AppDb.db.query('topics', columns: ['notes'], where: 'id=?', whereArgs: [widget.topicId]);
+      if (r.isNotEmpty) notes = ((r.first['notes'] as String?) ?? '').trim();
+    } catch (_) {}
     if (running) _startTicker();
     if (mounted) setState(() {});
   }
@@ -174,6 +179,34 @@ class _TimerPageState extends State<TimerPage> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(widget.title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
           ),
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Flexible(
+              flex: 2,
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxHeight: 96),
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: C.card,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Row(children: [
+                      Icon(Icons.notes_rounded, size: 14, color: Colors.white54),
+                      SizedBox(width: 6),
+                      Text('Notes', style: TextStyle(fontSize: 12, color: Colors.white54, fontWeight: FontWeight.w600)),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(notes, style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                  ]),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 30),
           SizedBox(
             width: 280,
