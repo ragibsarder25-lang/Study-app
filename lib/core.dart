@@ -463,9 +463,7 @@ class TimerStore {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}
-
-// ───────── Database (schema v4: topics.daily/finished, sessions.rating) ─────────
+}// ───────── Database (schema v4: topics.daily/finished, sessions.rating) ─────────
 class AppDb {
   static late Database db;
 
@@ -584,3 +582,142 @@ Future<int?> rateDialog(BuildContext context, String title, {int initial = 0}) {
     ),
   );
 }
+
+String dayKey(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+DateTime dayAgo(DateTime d, int n) => DateTime(d.year, d.month, d.day - n);
+
+int daysFromToday(DateTime d) {
+  final n = DateTime.now();
+  return DateTime.utc(d.year, d.month, d.day).difference(DateTime.utc(n.year, n.month, n.day)).inDays;
+}
+
+String fmtMin(int m) => m < 60 ? '${m}m' : (m % 60 == 0 ? '${m ~/ 60}h' : '${m ~/ 60}h ${m % 60}m');
+
+String kindLabel(String k) => k == 'new' ? 'Study' : (k == 'friday' ? 'Friday review' : 'Revision');
+
+String fmtCountdown(Duration d) {
+  if (d.isNegative) d = Duration.zero;
+  String two(int n) => n.toString().padLeft(2, '0');
+  final days = d.inDays, h = d.inHours % 24, m = d.inMinutes % 60, s = d.inSeconds % 60;
+  if (days > 0) return '${days}d ${two(h)}h ${two(m)}m ${two(s)}s';
+  if (d.inHours > 0) return '${d.inHours}h ${two(m)}m ${two(s)}s';
+  return '${two(m)}m ${two(s)}s';
+}
+
+class Stats {
+  int streak = 0, todayMin = 0, todaySessions = 0, totalMin = 0, totalSessions = 0, revisionSessions = 0;
+  List<int> week = List.filled(7, 0);
+  List<DateTime> weekDays = [];
+
+  static Future<Stats> load() async {
+    final s = Stats();
+    final rows = await AppDb.db.rawQuery(
+        "SELECT substr(startedAt,1,10) d, SUM(minutes) m, COUNT(*) c FROM sessions WHERE completed=1 GROUP BY d");
+    final mins = <String, int>{};
+    final cnt = <String, int>{};
+    for (final r in rows) {
+      final d = r['d'] as String?;
+      if (d == null) continue;
+      final m = (r['m'] as num?)?.toInt() ?? 0;
+      final c = (r['c'] as num?)?.toInt() ?? 0;
+      mins[d] = m;
+      cnt[d] = c;
+      s.totalMin += m;
+      s.totalSessions += c;
+    }
+    final today = DateTime.now();
+    s.todayMin = mins[dayKey(today)] ?? 0;
+    s.todaySessions = cnt[dayKey(today)] ?? 0;
+    var d = mins.containsKey(dayKey(today)) ? today : dayAgo(today, 1);
+    while (mins.containsKey(dayKey(d))) {
+      s.streak++;
+      d = dayAgo(d, 1);
+    }
+    s.weekDays = List.generate(7, (i) => dayAgo(today, 6 - i));
+    s.week = s.weekDays.map((x) => mins[dayKey(x)] ?? 0).toList();
+    s.revisionSessions = Sqflite.firstIntValue(await AppDb.db
+            .rawQuery("SELECT COUNT(*) FROM sessions WHERE completed=1 AND kind IN ('revision','friday')")) ??
+        0;
+    return s;
+  }
+}
+
+// ───────── Shared widgets ─────────
+Future<bool> confirmDialog(BuildContext context, String title, String body, String action) async {
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
+      ],
+    ),
+  );
+  return r == true;
+}
+
+class Panel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets padding;
+  final VoidCallback? onTap, onLongPress;
+  const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.onTap, this.onLongPress});
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(20);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: C.card,
+        borderRadius: r,
+        child: InkWell(
+          borderRadius: r,
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(borderRadius: r, border: Border.all(color: Colors.white.withOpacity(0.06))),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class IconBadge extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const IconBadge(this.icon, this.color, {super.key});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(color: color.withOpacity(0.16), borderRadius: BorderRadius.circular(14)),
+        child: Icon(icon, color: color, size: 22),
+      );
+}
+
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const EmptyState(this.icon, this.text, {super.key});
+  @override
+  Widget build(BuildContext context) => Panel(
+        padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 18),
+        child: Row(children: [
+          Icon(icon, color: Colors.white38),
+          const SizedBox(width: 14),
+          Expanded(child: Text(text, style: const TextStyle(color: Colors.white54))),
+        ]),
+      );
+}
+
+Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(t, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+        if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
+      ]),
+    );
