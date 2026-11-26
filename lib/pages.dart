@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'core.dart';
+import 'jobs_page.dart';
 import 'timer_page.dart';
 
 export 'progress_page.dart';
@@ -15,7 +16,7 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
-  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [];
+  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [];
   List<ActiveTimer> active = [];
   Stats stats = Stats();
   Timer? tick;
@@ -64,6 +65,14 @@ class _DashboardState extends State<Dashboard> {
               "$base WHERE t.completedAt IS NOT NULL AND t.id NOT IN (SELECT topicId FROM sessions WHERE kind='friday' AND completed=1 AND substr(startedAt,1,10)=?) ORDER BY s.name, t.title",
               [dayKey(now)])
           : [];
+      try {
+        await JobDb.ensure();
+        jobDates = await AppDb.db.rawQuery(
+            "SELECT * FROM job_applications WHERE deadline IS NOT NULL AND deadline >= ? AND status NOT IN ('Selected','Rejected') ORDER BY deadline LIMIT 5",
+            [dayKey(now)]);
+      } catch (_) {
+        jobDates = [];
+      }
       final a = await Future.wait([TimerStore.get('long'), TimerStore.get('short')]);
       active = a.whereType<ActiveTimer>().toList();
       stats = await Stats.load();
@@ -83,6 +92,7 @@ class _DashboardState extends State<Dashboard> {
         const SizedBox(height: 22),
         if (active.isNotEmpty) ...[_activeSection(), const SizedBox(height: 14)],
         if (upcoming.isNotEmpty) ...[_upcomingSection(), const SizedBox(height: 14)],
+        if (jobDates.isNotEmpty) ...[_jobDatesSection(), const SizedBox(height: 14)],
         if (isFriday) ...[
           _section('Friday full review', friday, 'friday', 'All topics reviewed today. Great work!'),
           const SizedBox(height: 14),
@@ -205,6 +215,34 @@ class _DashboardState extends State<Dashboard> {
               ]),
             ),
             Text(fmtCountdown(left), style: const TextStyle(fontWeight: FontWeight.w700, color: C.cyan, fontSize: 13)),
+          ]),
+        );
+      }),
+    ]);
+  }
+
+  Widget _jobDatesSection() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _heading('Upcoming job dates', jobDates.length),
+      ...jobDates.map((j) {
+        final dl = DateTime.parse(j['deadline'] as String);
+        final d = daysFromToday(dl);
+        final when = d <= 0 ? 'Today' : (d == 1 ? 'Tomorrow' : 'in ${d}d');
+        final color = d <= 1 ? C.orange : C.cyan;
+        final org = ((j['org'] as String?) ?? '').trim();
+        return Panel(
+          child: Row(children: [
+            IconBadge(Icons.work_outline, color),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(j['title'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 3),
+                Text('${org.isEmpty ? '' : '$org  ·  '}${j['status']}  ·  ${DateFormat('d MMM').format(dl)}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              ]),
+            ),
+            Text(when, style: TextStyle(fontWeight: FontWeight.w700, color: color, fontSize: 13)),
           ]),
         );
       }),
@@ -468,7 +506,7 @@ class _SubjectsPageState extends State<SubjectsPage> {
                         if (ctx.mounted) Navigator.pop(ctx);
                         load();
                       },
-                                            child: const Text('Save'))
+                      child: const Text('Save'))
                 ]));
   }
 
