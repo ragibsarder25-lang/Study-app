@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'backup.dart';
 import 'core.dart';
 
 const jobStatuses = ['Applied', 'Admit card', 'Written', 'Viva', 'Result', 'Selected', 'Rejected'];
@@ -184,6 +185,7 @@ class _JobsPageState extends State<JobsPage> {
                   final ok = await confirmDialog(ctx, 'Delete application?', 'This cannot be undone.', 'Delete');
                   if (!ok) return;
                   await AppDb.db.delete('job_applications', where: 'id=?', whereArgs: [job['id']]);
+                  await Notifier.cancelJob(job['id'] as int);
                   if (ctx.mounted) Navigator.pop(ctx);
                 },
                 child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
@@ -202,11 +204,14 @@ class _JobsPageState extends State<JobsPage> {
                     'notes': notes.text.trim(),
                     'cost': double.tryParse(cost.text.trim().replaceAll(',', '')) ?? 0,
                   };
+                  final int id;
                   if (job == null) {
-                    await AppDb.db.insert('job_applications', row);
+                    id = await AppDb.db.insert('job_applications', row);
                   } else {
-                    await AppDb.db.update('job_applications', row, where: 'id=?', whereArgs: [job['id']]);
+                    id = job['id'] as int;
+                    await AppDb.db.update('job_applications', row, where: 'id=?', whereArgs: [id]);
                   }
+                  await Notifier.scheduleJob(id, t, org.text.trim(), status, deadline);
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
               },
@@ -240,9 +245,28 @@ class _JobsPageState extends State<JobsPage> {
       floatingActionButton: FloatingActionButton(onPressed: () => edit(), child: const Icon(Icons.add)),
       body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-          child: pageTitle(context, 'Jobs',
-              '${jobs.length} applied  ·  ${count('Selected')} selected  ·  ${count('Rejected')} rejected  ·  Tk ${_money.format(totalAll)} spent'),
+          padding: const EdgeInsets.fromLTRB(20, 20, 8, 0),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: pageTitle(context, 'Jobs',
+                  '${jobs.length} applied  ·  ${count('Selected')} selected  ·  ${count('Rejected')} rejected  ·  Tk ${_money.format(totalAll)} spent'),
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (v) async {
+                if (v == 'csv') {
+                  try {
+                    await Backup.shareJobsCsv();
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+                    }
+                  }
+                }
+              },
+              itemBuilder: (_) => const [PopupMenuItem(value: 'csv', child: Text('Export CSV'))],
+            ),
+          ]),
         ),
         SizedBox(
           height: 40,
