@@ -120,7 +120,7 @@ class Plan {
     if (!have.contains('rcb')) await AppDb.db.execute('ALTER TABLE sessions ADD COLUMN rcb INTEGER');
   }
 
-  // ───────── Core math ─────────
+    // ───────── Core math ─────────
   static Duration _dur(double d) => Duration(minutes: (d * 1440).round());
   static DateTime _tomorrow(DateTime d) => DateTime(d.year, d.month, d.day + 1);
 
@@ -256,7 +256,12 @@ class Plan {
     if (tid == null || (kind != 'new' && kind != 'revision')) return;
     final last = await db.rawQuery(
         "SELECT MAX(id) m FROM sessions WHERE topicId=? AND kind IN ('new','revision') AND completed=1", [tid]);
-    if ((last.first['m'] as num?)?.toInt() != sid) return;
+    if ((last.first['m'] as num?)?.toInt() != sid) {
+      // An older session was (re)rated: the topic's history changed, so re-plan it from that history.
+      await replanTopic(tid);
+      await Notifier.refreshTopic(tid);
+      return;
+    }
     final ts = await db.query('topics', where: 'id=?', whereArgs: [tid]);
     if (ts.isEmpty) return;
     final t = ts.first;
@@ -281,33 +286,46 @@ class Plan {
           where: 'id=?', whereArgs: [tid]);
     }
     await Notifier.refreshTopic(tid);
+  }  /// Re-plans one topic's upcoming revision from its latest session and rating history.
+  /// Returns false when nothing needed to change (no revision scheduled, already due, daily or finished).
+  static Future<bool> _replanRow(Map<String, Object?> t, DateTime now) async {
+    final db = AppDb.db;
+    final id = (t['id'] as num).toInt();
+    final due = DateTime.tryParse('${t['nextRevision']}');
+    if (due == null || !due.isAfter(now)) return false;
+    final ss = await db.rawQuery(
+        "SELECT startedAt, minutes FROM sessions WHERE topicId=? AND kind IN ('new','revision') AND completed=1 ORDER BY id DESC LIMIT 1",
+        [id]);
+    if (ss.isEmpty) return false;
+    final st = DateTime.tryParse('${ss.first['startedAt']}');
+    if (st == null) return false;
+    final done = st.add(Duration(minutes: (ss.first['minutes'] as num?)?.toInt() ?? 0));
+    final h = await _hist(id);
+    final d = days((t['revisionCount'] as num?)?.toInt() ?? 0, h.$1, h.$2);
+    var next = done.add(_dur(d));
+    if (!next.isAfter(now)) next = DateTime(now.year, now.month, now.day + 1, due.hour, due.minute);
+    next = await _balanced(next, id, d);
+    await db.update('topics', {'nextRevision': next.toIso8601String()}, where: 'id=?', whereArgs: [id]);
+    return true;
+  }
+
+  /// Re-plans a single topic (used after any rating, including an older session's).
+  static Future<void> replanTopic(int id) async {
+    final ts = await AppDb.db.query('topics', where: 'id=?', whereArgs: [id]);
+    if (ts.isEmpty) return;
+    final t = ts.first;
+    if (flagOf(t, 'daily') || flagOf(t, 'finished')) return;
+    await _replanRow(t, DateTime.now());
   }
 
   /// Re-applies the current rules to every upcoming (not yet due) revision. Returns how many moved.
   static Future<int> replanAll() async {
-    final db = AppDb.db;
     final now = DateTime.now();
     var n = 0;
-    final ts = await db.query('topics',
+    final ts = await AppDb.db.query('topics',
         where: 'nextRevision IS NOT NULL AND COALESCE(daily,0)=0 AND COALESCE(finished,0)=0');
     for (final t in ts) {
-      final id = (t['id'] as num).toInt();
-      final due = DateTime.tryParse('${t['nextRevision']}');
-      if (due == null || !due.isAfter(now)) continue;
-      final ss = await db.rawQuery(
-          "SELECT startedAt, minutes FROM sessions WHERE topicId=? AND kind IN ('new','revision') AND completed=1 ORDER BY id DESC LIMIT 1",
-          [id]);
-      if (ss.isEmpty) continue;
-      final st = DateTime.tryParse('${ss.first['startedAt']}');
-      if (st == null) continue;
-      final done = st.add(Duration(minutes: (ss.first['minutes'] as num?)?.toInt() ?? 0));
-      final h = await _hist(id);
-      final d = days((t['revisionCount'] as num?)?.toInt() ?? 0, h.$1, h.$2);
-      var next = done.add(_dur(d));
-      if (!next.isAfter(now)) next = DateTime(now.year, now.month, now.day + 1, due.hour, due.minute);
-      next = await _balanced(next, id, d);
-      await db.update('topics', {'nextRevision': next.toIso8601String()}, where: 'id=?', whereArgs: [id]);
-      n++;
+      if (await _replanRow(t, now)) n++;
     }
     await Notifier.rescheduleAll();
     return n;
