@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'core.dart';
 import 'jobs_page.dart';
+import 'plan_ui.dart';
+import 'planner.dart';
 import 'timer_page.dart';
 
 export 'progress_page.dart';
@@ -16,7 +18,8 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
-  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [];
+  List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
+  int pendingRate = 0;
   List<ActiveTimer> active = [];
   Stats stats = Stats();
   Timer? tick;
@@ -57,7 +60,13 @@ class _DashboardState extends State<Dashboard> {
       final now = DateTime.now();
       final nowS = now.toIso8601String();
       const base = "SELECT t.*, s.name subject FROM topics t JOIN subjects s ON s.id=t.subjectId";
-      revisions = await AppDb.db.rawQuery("$base WHERE t.nextRevision IS NOT NULL AND t.nextRevision <= ? ORDER BY t.nextRevision", [nowS]);
+      revisions = await AppDb.db.rawQuery(
+          "$base WHERE t.nextRevision IS NOT NULL AND t.nextRevision <= ? AND COALESCE(t.daily,0)=0 AND COALESCE(t.finished,0)=0 ORDER BY t.nextRevision",
+          [nowS]);
+      practice = await AppDb.db.rawQuery(
+          "$base WHERE t.nextRevision IS NOT NULL AND t.nextRevision <= ? AND COALESCE(t.daily,0)=1 AND COALESCE(t.finished,0)=0 ORDER BY s.name, t.title",
+          [nowS]);
+      pendingRate = (await Plan.pending()).length;
       newTopics = await AppDb.db.rawQuery("$base WHERE t.completedAt IS NULL ORDER BY t.createdAt");
       upcoming = await AppDb.db.rawQuery("$base WHERE t.nextRevision IS NOT NULL AND t.nextRevision > ? ORDER BY t.nextRevision LIMIT 3", [nowS]);
       friday = (now.weekday == DateTime.friday && Prefs.fridayReview)
@@ -75,6 +84,12 @@ class _DashboardState extends State<Dashboard> {
       }
       final a = await Future.wait([TimerStore.get('long'), TimerStore.get('short')]);
       active = a.whereType<ActiveTimer>().toList();
+      // A topic with a running/paused timer lives only in "In progress"; cancelling returns it to its list.
+      bool busy(Map<String, dynamic> t, String kind) => active.any((x) => x.topicId == t['id'] && x.kind == kind);
+      revisions = revisions.where((t) => !busy(t, 'revision')).toList();
+      practice = practice.where((t) => !busy(t, 'revision')).toList();
+      newTopics = newTopics.where((t) => !busy(t, 'new')).toList();
+      friday = friday.where((t) => !busy(t, 'friday')).toList();
       stats = await Stats.load();
     } finally {
       loading = false;
@@ -90,6 +105,7 @@ class _DashboardState extends State<Dashboard> {
       child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(20), children: [
         _hero(),
         const SizedBox(height: 22),
+        if (pendingRate > 0) ...[_rateBanner(), const SizedBox(height: 14)],
         if (active.isNotEmpty) ...[_activeSection(), const SizedBox(height: 14)],
         if (upcoming.isNotEmpty) ...[_upcomingSection(), const SizedBox(height: 14)],
         if (jobDates.isNotEmpty) ...[_jobDatesSection(), const SizedBox(height: 14)],
@@ -99,6 +115,10 @@ class _DashboardState extends State<Dashboard> {
         ],
         _section('Revision', revisions, 'revision', 'No revisions due.'),
         const SizedBox(height: 14),
+        if (practice.isNotEmpty) ...[
+          _section('Everyday practice', practice, 'revision', ''),
+          const SizedBox(height: 14),
+        ],
         _section('New study', newTopics, 'new', 'No new topics. Add one from Subjects.'),
         const SizedBox(height: 20),
       ]),
@@ -125,7 +145,7 @@ class _DashboardState extends State<Dashboard> {
           const SizedBox(width: 10),
           _pill(Icons.timer_outlined, fmtMin(stats.todayMin), 'today'),
           const SizedBox(width: 10),
-          _pill(Icons.event_repeat, '${revisions.length}', 'due'),
+          _pill(Icons.event_repeat, '${revisions.length + practice.length}', 'due'),
         ]),
       ]),
     );
@@ -154,6 +174,25 @@ class _DashboardState extends State<Dashboard> {
             decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
             child: Text('$count', style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
+        ]),
+      );
+
+  Widget _rateBanner() => Panel(
+        onTap: () async {
+          final p = await Plan.pending();
+          if (p.isEmpty || !mounted) return;
+          await rateSession(context, p.first['id'] as int, '${p.first['title']}', '${p.first['kind']}');
+          await load();
+          widget.onChanged();
+        },
+        child: Row(children: [
+          const IconBadge(Icons.star_outline_rounded, C.orange),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text('$pendingRate session${pendingRate == 1 ? '' : 's'} to rate',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          ),
+          const Text('Rate', style: TextStyle(color: C.orange, fontWeight: FontWeight.w700)),
         ]),
       );
 
@@ -193,11 +232,11 @@ class _DashboardState extends State<Dashboard> {
   }
 
   Widget _upcomingSection() {
-    final now = DateTime.now();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _heading('Next revisions', upcoming.length),
       ...upcoming.map((t) {
-        final left = DateTime.parse(t['nextRevision'] as String).difference(now);
+        final d = daysFromToday(DateTime.parse(t['nextRevision'] as String));
+        final when = d <= 0 ? 'Today' : (d == 1 ? 'Tomorrow' : 'In ${d}d');
         return Panel(
           child: Row(children: [
             const IconBadge(Icons.hourglass_bottom_rounded, C.cyan),
@@ -214,7 +253,7 @@ class _DashboardState extends State<Dashboard> {
                 ],
               ]),
             ),
-            Text(fmtCountdown(left), style: const TextStyle(fontWeight: FontWeight.w700, color: C.cyan, fontSize: 13)),
+            Text(when, style: const TextStyle(fontWeight: FontWeight.w700, color: C.cyan, fontSize: 13)),
           ]),
         );
       }),
@@ -419,239 +458,3 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   'revisionCount': 0,
                   'daily': daily ? 1 : 0
                 });
-              } else {
-                final upd = <String, Object?>{'title': t, 'notes': notes.text.trim(), 'daily': daily ? 1 : 0};
-                if (daily && !wasDaily && topic['completedAt'] != null) {
-                  // Already studied: make it due from tomorrow at the latest.
-                  final n = DateTime.now();
-                  final cap = DateTime(n.year, n.month, n.day + 1);
-                  final cur = DateTime.tryParse((topic['nextRevision'] as String?) ?? '');
-                  if (cur == null || cur.isAfter(cap)) upd['nextRevision'] = cap.toIso8601String();
-                }
-                await AppDb.db.update('topics', upd, where: 'id=?', whereArgs: [topic['id']]);
-                if (daily != wasDaily) await Notifier.rescheduleAll(); // add/remove its alarm
-              }
-              changed = true;
-            }
-            if (ctx.mounted) Navigator.pop(ctx);
-          },
-          child: const Text('Save'),
-        ),
-      ],
-    ),
-  );
-  return changed;
-}
-
-class SubjectsPage extends StatefulWidget {
-  final VoidCallback onChanged;
-  const SubjectsPage({super.key, required this.onChanged});
-  @override
-  State<SubjectsPage> createState() => _SubjectsPageState();
-}
-
-class _SubjectsPageState extends State<SubjectsPage> {
-  List<Map<String, dynamic>> subjects = [];
-  @override
-  void initState() {
-    super.initState();
-    load();
-  }
-
-  Future<void> load() async {
-    subjects = await AppDb.db.rawQuery(
-        "SELECT s.id, s.name, COUNT(t.id) total, SUM(CASE WHEN t.completedAt IS NOT NULL THEN 1 ELSE 0 END) done FROM subjects s LEFT JOIN topics t ON t.subjectId=s.id GROUP BY s.id ORDER BY s.name");
-    if (mounted) setState(() {});
-  }
-
-  Future<void> addSubject() async {
-    final c = TextEditingController();
-    await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-                title: const Text('Add subject'),
-                content: TextField(
-                    controller: c,
-                    autofocus: true,
-                    textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(hintText: 'e.g. English')),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () async {
-                        if (c.text.trim().isNotEmpty) {
-                          await AppDb.db.insert('subjects', {'name': c.text.trim()});
-                        }
-                        if (ctx.mounted) Navigator.pop(ctx);
-                        load();
-                      },
-                      child: const Text('Add'))
-                ]));
-  }
-
-  Future<void> renameSubject(Map<String, dynamic> s) async {
-    final c = TextEditingController(text: s['name'] as String);
-    await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-                title: const Text('Rename subject'),
-                content: TextField(controller: c, autofocus: true, textCapitalization: TextCapitalization.words),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () async {
-                        if (c.text.trim().isNotEmpty) {
-                          await AppDb.db.update('subjects', {'name': c.text.trim()}, where: 'id=?', whereArgs: [s['id']]);
-                        }
-                        if (ctx.mounted) Navigator.pop(ctx);
-                        load();
-                      },
-                      child: const Text('Save'))
-                ]));
-  }
-
-  Future<void> subjectMenu(Map<String, dynamic> s) async {
-    final choice = await showModalBottomSheet<String>(
-        context: context,
-        builder: (ctx) => SafeArea(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Rename'), onTap: () => Navigator.pop(ctx, 'rename')),
-              ListTile(
-                  leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                  title: const Text('Delete subject', style: TextStyle(color: Colors.redAccent)),
-                  onTap: () => Navigator.pop(ctx, 'delete')),
-            ])));
-    if (choice == 'rename') {
-      await renameSubject(s);
-    } else if (choice == 'delete') {
-      if (!mounted) return;
-      final ok = await confirmDialog(context, 'Delete "${s['name']}"?', 'All its topics and sessions will be removed.', 'Delete');
-      if (ok) {
-        await AppDb.deleteSubject(s['id'] as int);
-        await load();
-      }
-    }
-  }
-
-  Future<void> addTopic(int subjectId) async {
-    final changed = await topicDialog(context, subjectId: subjectId);
-    if (changed) await load();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        floatingActionButton: FloatingActionButton(onPressed: addSubject, child: const Icon(Icons.add)),
-        body: ListView(padding: const EdgeInsets.fromLTRB(20, 20, 20, 90), children: [
-          pageTitle(context, 'Subjects', 'Tap to open · long-press for options'),
-          if (subjects.isEmpty) const EmptyState(Icons.menu_book_outlined, 'No subjects yet. Tap + to add one.'),
-          ...subjects.map((s) {
-            final total = (s['total'] as num?)?.toInt() ?? 0;
-            final done = (s['done'] as num?)?.toInt() ?? 0;
-            return Panel(
-              onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => TopicList(subject: s)));
-                load();
-              },
-              onLongPress: () => subjectMenu(s),
-              child: Row(children: [
-                const IconBadge(Icons.menu_book_outlined, C.accent),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(s['name'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 3),
-                    Text('$total topics  ·  $done studied', style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(value: total == 0 ? 0 : done / total, minHeight: 5),
-                    ),
-                  ]),
-                ),
-                IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => addTopic(s['id'] as int)),
-              ]),
-            );
-          }),
-        ]),
-      );
-}
-
-class TopicList extends StatefulWidget {
-  final Map<String, dynamic> subject;
-  const TopicList({super.key, required this.subject});
-  @override
-  State<TopicList> createState() => _TopicListState();
-}
-
-class _TopicListState extends State<TopicList> {
-  List<Map<String, dynamic>> topics = [];
-  @override
-  void initState() {
-    super.initState();
-    load();
-  }
-
-  Future<void> load() async {
-    topics = await AppDb.db.query('topics', where: 'subjectId=?', whereArgs: [widget.subject['id']], orderBy: 'createdAt DESC');
-    if (mounted) setState(() {});
-  }
-
-  String status(Map<String, dynamic> t) {
-    final next = t['nextRevision'] as String?;
-    if (next == null) return 'Not studied yet';
-    final d = daysFromToday(DateTime.parse(next));
-    if (d < 0) return 'Revision overdue ${-d}d';
-    if (d == 0) return 'Revision due today';
-    return 'Next revision: ${DateFormat('MMM d').format(DateTime.parse(next))}';
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(widget.subject['name'] as String)),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () async {
-            if (await topicDialog(context, subjectId: widget.subject['id'] as int)) await load();
-          },
-          child: const Icon(Icons.add),
-        ),
-        body: ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 90),
-          itemCount: topics.isEmpty ? 1 : topics.length,
-          itemBuilder: (_, i) {
-            if (topics.isEmpty) return const EmptyState(Icons.library_add_outlined, 'No topics yet. Tap + to add one.');
-            final t = topics[i];
-            final next = t['nextRevision'] as String?;
-            final overdue = next != null && daysFromToday(DateTime.parse(next)) <= 0;
-            final notes = (t['notes'] as String?) ?? '';
-            final rc = (t['revisionCount'] as int?) ?? 0;
-            return Panel(
-              onTap: () async {
-                if (await topicDialog(context, subjectId: widget.subject['id'] as int, topic: t)) await load();
-              },
-              child: Row(children: [
-                IconBadge(next == null ? Icons.fiber_new_outlined : (overdue ? Icons.refresh_rounded : Icons.check_circle_outline),
-                    next == null ? C.accent : (overdue ? C.orange : C.green)),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(t['title'] as String, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 3),
-                    Text(status(t), style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                    if (notes.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(notes, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    ],
-                  ]),
-                ),
-                if (next != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
-                    child: Text(((t['daily'] as num?)?.toInt() ?? 0) == 1 ? 'Daily' : 'R$rc', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
-                  ),
-              ]),
-            );
-          },
-        ),
-      );
-}
