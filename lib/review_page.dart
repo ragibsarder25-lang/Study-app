@@ -26,7 +26,7 @@ class _ReviewPageState extends State<ReviewPage> {
   Future<void> load() async {
     final db = AppDb.db;
     unrated = await db.rawQuery(
-        "SELECT x.id, x.kind, x.startedAt, t.title, s.name subject FROM sessions x "
+        "SELECT x.id, x.topicId, x.kind, x.startedAt, t.title, s.name subject FROM sessions x "
         "JOIN topics t ON t.id=x.topicId JOIN subjects s ON s.id=t.subjectId "
         "WHERE x.completed=1 AND x.rating IS NULL AND x.kind IN ${Plan.kindsSql} ORDER BY x.startedAt DESC LIMIT 50");
     final rated = await db.rawQuery(
@@ -70,7 +70,7 @@ class _ReviewPageState extends State<ReviewPage> {
     if (ok) await load();
   }
 
-  Future<void> _lowActions(Map<String, dynamic> t) async {
+    Future<void> _lowActions(Map<String, dynamic> t) async {
     final choice = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -103,6 +103,29 @@ class _ReviewPageState extends State<ReviewPage> {
     await load();
   }
 
+  /// Unrated sessions grouped by topic: a topic header, then one tile per session.
+  List<Widget> _ratedByTopic() {
+    final groups = <int, List<Map<String, dynamic>>>{};
+    for (final r in unrated) {
+      groups.putIfAbsent((r['topicId'] as num?)?.toInt() ?? -1, () => []).add(r);
+    }
+    final out = <Widget>[];
+    for (final g in groups.values) {
+      out.add(Padding(
+        padding: const EdgeInsets.fromLTRB(2, 10, 2, 8),
+        child: Row(children: [
+          Expanded(
+            child: Text('${g.first['title']}  ·  ${g.first['subject']}',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white70)),
+          ),
+          Text('${g.length}', style: const TextStyle(fontSize: 13, color: Colors.white38)),
+        ]),
+      ));
+      out.addAll(g.map(_unratedTile));
+    }
+    return out;
+  }
+
   Widget _unratedTile(Map<String, dynamic> r) {
     final at = DateTime.tryParse('${r['startedAt']}');
     return Panel(
@@ -112,9 +135,9 @@ class _ReviewPageState extends State<ReviewPage> {
         const SizedBox(width: 14),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${r['title']}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(kindLabel('${r['kind']}'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 3),
-            Text('${r['subject']}  ·  ${kindLabel('${r['kind']}')}${at == null ? '' : '  ·  ${DateFormat('d MMM, h:mm a').format(at)}'}',
+            Text(at == null ? 'Tap to rate' : DateFormat('d MMM, h:mm a').format(at),
                 style: const TextStyle(color: Colors.grey, fontSize: 13)),
           ]),
         ),
@@ -123,7 +146,7 @@ class _ReviewPageState extends State<ReviewPage> {
     );
   }
 
-  Widget _lowTile(Map<String, dynamic> t) => Panel(
+    Widget _lowTile(Map<String, dynamic> t) => Panel(
         onTap: () => _lowActions(t),
         child: Row(children: [
           const IconBadge(Icons.flag_outlined, C.orange),
@@ -163,7 +186,7 @@ class _ReviewPageState extends State<ReviewPage> {
     String empty;
     switch (view) {
       case 'rate':
-        tiles = [for (final r in unrated) _unratedTile(r)];
+        tiles = _ratedByTopic();
         empty = 'All sessions are rated.';
         break;
       case 'finished':
