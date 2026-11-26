@@ -407,6 +407,28 @@ class TimerStore {
     }
   }
 
+  // Raw timer JSON per slot, used by backup/restore.
+  static Future<Map<String, String>> exportRaw() async {
+    final p0 = await _prefs;
+    final out = <String, String>{};
+    for (final slot in ['long', 'short']) {
+      final s = p0.getString('timer_$slot');
+      if (s != null) out[slot] = s;
+    }
+    return out;
+  }
+
+  static Future<void> importRaw(Map<String, String> raw) async {
+    final p0 = await _prefs;
+    for (final slot in ['long', 'short']) {
+      final s = raw[slot];
+      if (s == null) continue;
+      final t = ActiveTimer.fromJson(s);
+      if (t == null || t.slot != slot) continue;
+      await p0.setString('timer_$slot', s);
+    }
+  }
+
   static Future<void> rearmAll() async {
     for (final slot in ['long', 'short']) {
       final t = await get(slot);
@@ -524,7 +546,6 @@ class Stats {
   }
 }
 
-// ───────── Shared widgets ─────────
 Future<bool> confirmDialog(BuildContext context, String title, String body, String action) async {
   final r = await showDialog<bool>(
     context: context,
