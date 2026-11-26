@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'backup.dart';
 import 'core.dart';
 import 'extra.dart';
 
@@ -28,6 +29,33 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     widget.onChanged();
     if (mounted) setState(() {});
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _backup() async {
+    try {
+      await Backup.shareBackup();
+    } catch (e) {
+      _snack('Backup failed: $e');
+    }
+  }
+
+  Future<void> _restore() async {
+    final ok = await confirmDialog(context, 'Restore backup?',
+        'This replaces ALL current subjects, topics, sessions and job applications with the backup.', 'Choose file');
+    if (!ok) return;
+    try {
+      if (await Backup.restoreFromPicker()) {
+        widget.onChanged();
+        _snack('Backup restored');
+      }
+    } catch (e) {
+      _snack('Restore failed: $e');
+    }
   }
 
   void _saveIntervals(String s) {
@@ -134,6 +162,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
           ]),
+        ]),
+      ),
+      Panel(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Column(children: [
+          ListTile(
+            leading: const Icon(Icons.upload_file_outlined),
+            title: const Text('Back up data'),
+            subtitle: const Text('Share a backup file (study + jobs) to Drive, WhatsApp, etc.'),
+            onTap: _backup,
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Restore from backup'),
+            subtitle: const Text('Replaces everything currently in the app'),
+            onTap: _restore,
+          ),
         ]),
       ),
       Panel(
