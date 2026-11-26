@@ -313,11 +313,9 @@ class TimerStore {
   }
 
   static Future<void> cancel(String slot) async {
-    final t = await get(slot);
     await _clear(slot);
     await Notifier.cancel(idOf(slot));
     await Notifier.cancel(idOf(slot) + 2);
-    
   }
 
   // Records the session and schedules the next revision. Safe to call twice.
@@ -574,12 +572,4 @@ class EmptyState extends StatelessWidget {
 
 Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
       padding: const EdgeInsets.only(bottom: 18),
-  
-Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(t, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-        if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
-      ]),
-    );
-);
+      child: Column(crossAxisAlignment
