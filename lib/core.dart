@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
-import 'package:timezone/timezone.dart' as tz;
 import 'extra.dart';
 
 class C {
@@ -64,23 +64,6 @@ class Notifier {
   static final plugin = FlutterLocalNotificationsPlugin();
   static bool ready = false;
 
-  static const _details = NotificationDetails(
-    android: AndroidNotificationDetails(
-      'study_alarm_v2',
-      'Study alarms',
-      channelDescription: 'Revision and session alarms',
-      importance: Importance.max,
-      priority: Priority.max,
-      category: AndroidNotificationCategory.alarm,
-      audioAttributesUsage: AudioAttributesUsage.alarm,
-      playSound: true,
-      enableVibration: true,
-      enableLights: true,
-      visibility: NotificationVisibility.public,
-      ticker: 'Study alarm',
-    ),
-  );
-
   // Revision alert per topic: 1000+id = due now (old 5000+/7000+ ids are only cleaned up).
   static Future<void> scheduleRevision(int topicId, DateTime when, String title, String subject) =>
       at(1000 + topicId, when, 'Time to revise', '$title · $subject');
@@ -96,6 +79,7 @@ class Notifier {
       tzdata.initializeTimeZones();
       await plugin.initialize(const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
       ready = true;
+      try { await plugin.cancelAll(); } catch (_) {}
       await requestPermissions();
     } catch (_) {}
   }
@@ -108,34 +92,27 @@ class Notifier {
     } catch (_) {}
   }
 
+  static const _native = MethodChannel('study/alarm');
+
+  // Native AlarmManager (setAlarmClock) + BroadcastReceiver: fires even when the app is closed.
   static Future<void> at(int id, DateTime when, String title, String body, {bool force = false}) async {
-    if (!ready || (!Prefs.alarms && !force)) return;
+    if (!Prefs.alarms && !force) return;
     if (!when.isAfter(DateTime.now())) return;
-    final t = tz.TZDateTime.fromMillisecondsSinceEpoch(tz.UTC, when.millisecondsSinceEpoch);
     try {
-      await plugin.zonedSchedule(id, title, body, t, _details,
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
-    } catch (_) {
-      try {
-        await plugin.zonedSchedule(id, title, body, t, _details,
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
-      } catch (_) {}
-    }
+      await _native.invokeMethod('schedule',
+          {'id': id, 'when': when.millisecondsSinceEpoch, 'title': title, 'body': body});
+    } catch (_) {}
   }
 
   static Future<void> cancel(int id) async {
-    if (!ready) return;
     try {
-      await plugin.cancel(id);
+      await _native.invokeMethod('cancel', {'id': id});
     } catch (_) {}
   }
 
   static Future<void> cancelAll() async {
-    if (!ready) return;
     try {
-      await plugin.cancelAll();
+      await _native.invokeMethod('cancelAll');
     } catch (_) {}
   }
 
@@ -393,9 +370,7 @@ class TimerStore {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}
-
-// ───────── Database (schema v1 unchanged) ─────────
+}// ───────── Database (schema v1 unchanged) ─────────
 class AppDb {
   static late Database db;
   static Future<void> init() async {
@@ -572,7 +547,7 @@ class EmptyState extends StatelessWidget {
 
 Widget pageTitle(BuildContext context, String t, [String? sub]) => Padding(
       padding: const EdgeInsets.only(bottom: 18),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(t, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
         if (sub != null) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(color: Colors.grey))],
       ]),
