@@ -203,6 +203,52 @@ class _PlanSettingsState extends State<PlanSettings> {
         ]),
       );
 
+  /// Warns when the daily limit, session lengths and new-topics pace do not fit together.
+  Widget _budgetCheck() {
+    final limit = Plan.budget;
+    final study = Prefs.studyMin;
+    final rev = Prefs.revisionMin;
+    final newMin = Plan.newPerDay * study;
+    final warns = <String>[];
+    if (limit < study) {
+      warns.add('Daily limit ($limit min) is shorter than one study session ($study min). Raise the limit or shorten the session.');
+    }
+    if (limit < rev) {
+      warns.add('Daily limit ($limit min) is shorter than one revision session ($rev min).');
+    }
+    if (Plan.newPerDay > 0 && limit >= study) {
+      if (newMin >= limit) {
+        warns.add('${Plan.newPerDay} new topics x $study min = $newMin min fills the whole $limit min limit, '
+            'so no revisions fit and revisions cannot be moved to lighter days. '
+            'Lower new topics per day or the study session, or raise the limit.');
+      } else if (newMin + rev > limit) {
+        warns.add('New study ($newMin min) leaves less than one revision session ($rev min) under the $limit min limit.');
+      }
+    }
+    final left = (limit - newMin).clamp(0, limit).toInt();
+    final newPct = limit == 0 ? 0 : (newMin * 100 / limit).round().clamp(0, 999);
+    final revN = rev == 0 ? 0 : left ~/ rev;
+    final ok = warns.isEmpty;
+    return Panel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(ok ? Icons.check_circle_outline : Icons.warning_amber_rounded, color: ok ? C.green : C.orange, size: 20),
+          const SizedBox(width: 8),
+          Text(ok ? 'Limits fit together' : 'Check your limits', style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+            'New study about $newMin min ($newPct% of the limit). '
+            'Left for revision and practice: $left min (about $revN revisions).',
+            style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        for (final w in warns) ...[
+          const SizedBox(height: 6),
+          Text(w, style: const TextStyle(color: C.orange, fontSize: 12)),
+        ],
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -261,6 +307,7 @@ class _PlanSettingsState extends State<PlanSettings> {
           _num('Forecast length', Plan.horizon, 7, 7, 60, (v) => Plan.horizon = v.toInt(), unit: ' d'),
         ]),
       ),
+      _budgetCheck(),
       Panel(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Column(children: [
