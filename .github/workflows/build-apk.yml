@@ -25,6 +25,7 @@ jobs:
           sed -i 's/sourceCompatibility = JavaVersion.VERSION_1_8/coreLibraryDesugaringEnabled true\n        sourceCompatibility = JavaVersion.VERSION_1_8/' android/app/build.gradle
           printf '\ndependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"\n}\n' >> android/app/build.gradle
           python3 tools/patch_manifest.py android/app/src/main/AndroidManifest.xml
+          python3 tools/native_alarm.py android
           sed -i 's#android:label="recursive_study"#android:label="Recursive Study"#' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
       - run: flutter build apk --release --no-shrink
