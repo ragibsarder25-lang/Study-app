@@ -458,3 +458,33 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   'revisionCount': 0,
                   'daily': daily ? 1 : 0
                 });
+              } else {
+                final upd = <String, Object?>{'title': t, 'notes': notes.text.trim(), 'daily': daily ? 1 : 0};
+                if (daily && !wasDaily && topic['completedAt'] != null) {
+                  // Already studied: make it due from tomorrow at the latest.
+                  final n = DateTime.now();
+                  final cap = DateTime(n.year, n.month, n.day + 1);
+                  final cur = DateTime.tryParse((topic['nextRevision'] as String?) ?? '');
+                  if (cur == null || cur.isAfter(cap)) upd['nextRevision'] = cap.toIso8601String();
+                }
+                await AppDb.db.update('topics', upd, where: 'id=?', whereArgs: [topic['id']]);
+                if (daily != wasDaily) await Notifier.rescheduleAll(); // add/remove its alarm
+                if (finishedFlag != wasFinished) {
+                  if (finishedFlag) {
+                    await AppDb.markFinished(topic['id'] as int);
+                  } else {
+                    await AppDb.reopen(topic['id'] as int);
+                  }
+                }
+              }
+              changed = true;
+            }
+            if (ctx.mounted) Navigator.pop(ctx);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+  return changed;
+}
