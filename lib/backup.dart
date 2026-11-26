@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import 'core.dart';
 import 'extra.dart';
 import 'jobs_page.dart';
+import 'planner.dart';
 
 class Backup {
   // Insert order matters (parents first).
@@ -34,6 +35,7 @@ class Backup {
       'reminderHour': Extra.reminderHour,
       'reminderMinute': Extra.reminderMinute,
     };
+    data['plan'] = Plan.toMap();
     data['timers'] = await TimerStore.exportRaw();
     return const JsonEncoder.withIndent(' ').convert(data);
   }
@@ -112,6 +114,7 @@ class Backup {
       }
     });
     if (settings != null) await _applySettings(settings);
+    if (m['plan'] is Map) await Plan.fromMap(Map<String, dynamic>.from(m['plan'] as Map));
     if (timers != null && timers.isNotEmpty) {
       await TimerStore.importRaw(timers);
       await TimerStore.sweep();
