@@ -468,7 +468,7 @@ class TimerStore {
   }
 }
 
-// ───────── Database (schema v4: topics.daily/finished, sessions.rating) ─────────
+// ───────── Database (schema v5: topics.daily/finished, sessions.rating) ─────────
 class AppDb {
   static late Database db;
 
@@ -480,7 +480,7 @@ class AppDb {
   static Future<void> init() async {
     db = await openDatabase(
       p.join(await getDatabasesPath(), 'recursive_study.db'),
-      version: 4,
+      version: 5, // 5: repairs installs created without topics.daily
       onUpgrade: (db, oldV, newV) async {
         await _addCol(db, 'topics', 'daily', 'INTEGER DEFAULT 0');
         await _addCol(db, 'topics', 'finished', 'INTEGER DEFAULT 0');
@@ -492,7 +492,7 @@ class AppDb {
           id INTEGER PRIMARY KEY AUTOINCREMENT, subjectId INTEGER NOT NULL,
           title TEXT NOT NULL, notes TEXT DEFAULT '', createdAt TEXT NOT NULL,
           completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT,
-           finished INTEGER DEFAULT 0
+          daily INTEGER DEFAULT 0, finished INTEGER DEFAULT 0
         )''');
         await db.execute('''CREATE TABLE sessions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, topicId INTEGER, kind TEXT NOT NULL,
@@ -530,6 +530,18 @@ class AppDb {
   }
 
   static Future<void> deleteTopic(int id) async {
+    await db.transaction((txn) async {
+      await txn.delete('sessions', where: 'topicId=?', whereArgs: [id]);
+      await txn.delete('topics', where: 'id=?', whereArgs: [id]);
+    });
+    await Notifier.cancelRevision(id);
+  }
+
+  static Future<void> deleteSubject(int id) async {
+    final ids = await db.query('topics', columns: ['id'], where: 'subjectId=?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.rawDelete('DELETE FROM sessions WHERE topicId IN (SELECT id FROM topics WHERE subjectId=?)', [id]);
+      await txn.delete(  static Future<void> deleteTopic(int id) async {
     await db.transaction((txn) async {
       await txn.delete('sessions', where: 'topicId=?', whereArgs: [id]);
       await txn.delete('topics', where: 'id=?', whereArgs: [id]);
