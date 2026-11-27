@@ -195,7 +195,9 @@ class _DashboardState extends State<Dashboard> {
             child: Text('$count', style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
         ]),
-      );  Widget _rateBanner() => Panel(
+      );
+
+  Widget _rateBanner() => Panel(
         onTap: () async {
           final p = await Plan.pending();
           if (p.isEmpty || !mounted) return;
@@ -212,9 +214,7 @@ class _DashboardState extends State<Dashboard> {
           ),
           const Text('Rate', style: TextStyle(color: C.orange, fontWeight: FontWeight.w700)),
         ]),
-      );
-
-  Widget _activeSection() {
+      );  Widget _activeSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _heading('In progress', active.length),
       ...active.map((a) {
@@ -247,9 +247,9 @@ class _DashboardState extends State<Dashboard> {
         );
       }),
     ]);
-  };
-  return changed;
-}  Widget _upcomingSection() {
+  }
+
+  Widget _upcomingSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _heading('Next revisions', upcoming.length),
       ...upcoming.map((t) {
@@ -343,9 +343,7 @@ class _DashboardState extends State<Dashboard> {
       if (open) ...list.map((t) => _tile(t, kind)),
       const SizedBox(height: 4),
     ]);
-  }
-
-  Widget _tile(Map<String, dynamic> t, String kind) {
+  }  Widget _tile(Map<String, dynamic> t, String kind) {
     String sub;
     Color color;
     IconData icon;
@@ -416,6 +414,7 @@ class _DashboardState extends State<Dashboard> {
     widget.onChanged();
   }
 }
+
 // ───────────────────────── Subjects ─────────────────────────
 Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<String, dynamic>? topic}) async {
   final title = TextEditingController(text: (topic?['title'] ?? '') as String);
@@ -496,8 +495,7 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   final cap = DateTime(n.year, n.month, n.day + 1);
                   final cur = DateTime.tryParse((topic['nextRevision'] as String?) ?? '');
                   if (cur == null || cur.isAfter(cap)) upd['nextRevision'] = cap.toIso8601String();
-
-                                  }
+                }
                 await AppDb.db.update('topics', upd, where: 'id=?', whereArgs: [topic['id']]);
                 if (daily != wasDaily) await Notifier.rescheduleAll(); // add/remove its alarm
                 if (finishedFlag != wasFinished) {
