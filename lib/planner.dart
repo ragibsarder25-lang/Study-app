@@ -570,7 +570,7 @@ class RevisionStats {
         s.dist[v - 1]++;
         subjSum[name] = (subjSum[name] ?? 0) + v;
         subjN[name] = (subjN[name] ?? 0) + 1;
-        if (r['kind'] == 'revision' && v <= lapseAt) s.lapses++;
+        if (r['kind'] == 'revision' && v <= Plan.lapseAt) s.lapses++;
       }
       final due = r['due'];
       if (r['kind'] == 'revision' && due != null && at != null) {
