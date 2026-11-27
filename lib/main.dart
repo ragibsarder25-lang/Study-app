@@ -6,17 +6,88 @@ import 'extra.dart';
 import 'jobs_page.dart';
 import 'planner.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await AppDb.init();
-  await Prefs.init();
-  await Plan.init();
-  await Extra.init();
-  await Notifier.init();
-  await TimerStore.sweep();
-  await Notifier.rescheduleAll();
-  await Extra.applyDaily();
-  runApp(const RecursiveStudyApp());
+  // Draw something immediately. Startup work runs inside Boot, so a failure or a
+  // hang shows up on screen instead of leaving a blank white window.
+  runApp(const Boot());
+}
+
+class Boot extends StatefulWidget {
+  const Boot({super.key});
+  @override
+  State<Boot> createState() => _BootState();
+}
+
+class _BootState extends State<Boot> {
+  bool ready = false;
+  String step = 'Starting…';
+  String? fatal;
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    // Essential: without the database nothing works.
+    try {
+      step = 'Opening database…';
+      if (mounted) setState(() {});
+      await AppDb.init().timeout(const Duration(seconds: 20));
+    } catch (e, st) {
+      if (mounted) setState(() => fatal = 'Database failed to open:\n$e\n\n$st');
+      return;
+    }
+    // Everything else must never stop the app from opening.
+    final steps = <String, Future<void> Function()>{
+      'Settings': Prefs.init,
+      'Planner': Plan.init,
+      'Appearance': Extra.init,
+      'Notifications': Notifier.init,
+      'Timers': TimerStore.sweep,
+      'Reminders': Notifier.rescheduleAll,
+      'Daily reminders': Extra.applyDaily,
+    };
+    final errors = <String>[];
+    for (final e in steps.entries) {
+      try {
+        step = '${e.key}…';
+        if (mounted) setState(() {});
+        await e.value().timeout(const Duration(seconds: 6));
+      } catch (err) {
+        errors.add('${e.key}: $err');
+      }
+    }
+    if (errors.isNotEmpty) debugPrint('Startup warnings:\n${errors.join('\n')}');
+    if (mounted) setState(() => ready = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (ready) return const RecursiveStudyApp();
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(useMaterial3: true).copyWith(scaffoldBackgroundColor: C.bg),
+      home: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: fatal != null
+                  ? SingleChildScrollView(child: SelectableText(fatal!, style: const TextStyle(fontSize: 12)))
+                  : Column(mainAxisSize: MainAxisSize.min, children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text(step, style: const TextStyle(color: Colors.white54)),
+                    ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class RecursiveStudyApp extends StatelessWidget {
