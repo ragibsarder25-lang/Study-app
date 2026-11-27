@@ -82,7 +82,8 @@ class _ForecastCardState extends State<ForecastCard> {
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('New study: ${d.newN} topics · ${fmtMin(d.newMin)}'),
             const SizedBox(height: 6),
-            Text('Scheduled revision: ${d.revN} topics · ${fmtMin(d.revMin)}'),
+            Text('Scheduled revision: ${d.revN} of ${Plan.dailyCap} topics · ${fmtMin(d.revMin)}',
+                style: TextStyle(color: d.revN > Plan.dailyCap ? Colors.redAccent : null)),
             const SizedBox(height: 6),
             Text('Everyday practice: ${d.dailyN} topics · ${fmtMin(d.dailyMin)}'),
             const SizedBox(height: 10),
@@ -102,7 +103,7 @@ class _ForecastCardState extends State<ForecastCard> {
       );
 
   Widget _row(int i, DayLoad d, int scale) {
-    final over = d.total > Plan.budget;
+    final over = d.total > Plan.budget || d.revN > Plan.dailyCap;
     return InkWell(
       onTap: () => _detail(i, d),
       child: Padding(
@@ -136,8 +137,7 @@ class _ForecastCardState extends State<ForecastCard> {
                 textAlign: TextAlign.right,
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: over ? Colors.redAccent : Colors.white70)),
           ),
-        ]),
-      ),
+        ]),      ),
     );
   }
 
@@ -245,6 +245,7 @@ class _PlanSettingsState extends State<PlanSettings> {
           _head('Adaptation rules'),
           _num('Learning from recall', Plan.adapt, 5, 0, 100, (v) => Plan.adapt = v.toInt(), unit: '%'),
           _num('Star weight fades / revision', Plan.fade, 5, 0, 100, (v) => Plan.fade = v.toInt(), unit: '%'),
+          _num('Max revisions per day', Plan.dailyCap, 1, 1, 60, (v) => Plan.dailyCap = v.toInt(), unit: ' topics'),
           _num('Lapse at recall ≤', Plan.lapseAt, 1, 0, 3, (v) => Plan.lapseAt = v.toInt(), unit: '★'),
           _num('Lapse steps back', Plan.lapseBack, 1, 0, 5, (v) => Plan.lapseBack = v.toInt()),
           _num('Shortest interval', Plan.minDays, 0.5, 0.5, 30, (v) => Plan.minDays = v.toDouble(), unit: ' d'),
@@ -275,10 +276,135 @@ class _PlanSettingsState extends State<PlanSettings> {
               if (!ok) return;
               await Plan.reset();
               await _save();
-            },
-          ),
+            },          ),
         ]),
       ),
     ]);
+  }
+}
+
+// ───────────────────────── Revision statistics ─────────────────────────
+Color confColor(int? c) => c == null ? Colors.white38 : (c >= 70 ? C.green : (c >= 40 ? C.orange : Colors.redAccent));
+
+class RevisionStatsCard extends StatefulWidget {
+  const RevisionStatsCard({super.key});
+  @override
+  State<RevisionStatsCard> createState() => _RevisionStatsCardState();
+}
+
+class _RevisionStatsCardState extends State<RevisionStatsCard> {
+  RevisionStats? st;
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    try {
+      st = await RevisionStats.load();
+    } catch (_) {}
+    if (mounted) setState(() {});
+  }
+
+  Widget _cell(String label, String value, [Color? c]) => SizedBox(
+        width: 92,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c)),
+          Text(label, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final s = st;
+    if (s == null) return const SizedBox.shrink();
+    final conf = s.confidence;
+    final maxD = s.dist.fold<int>(0, math.max);
+    return Panel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Revision statistics', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Text(conf == null ? '—' : '$conf%', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: confColor(conf))),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Confidence · ${Plan.confLabel(conf)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                    value: (conf ?? 0) / 100, minHeight: 6, backgroundColor: Colors.white12, color: confColor(conf)),
+              ),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Text('From recent ratings, progress through your revision intervals, and overdue topics (${s.studied} studied).',
+            style: const TextStyle(fontSize: 11, color: Colors.white38)),
+        const SizedBox(height: 14),
+        Wrap(runSpacing: 12, children: [
+          _cell('Revisions', '${s.total}'),
+          _cell('Last 7 days', '${s.last7}'),
+          _cell('Last 30 days', '${s.last30}'),
+          _cell('Avg recall', s.rated == 0 ? '—' : '★${s.avgRecall.toStringAsFixed(1)}'),
+          _cell('Lapse rate', s.rated == 0 ? '—' : '${(s.lapseRate * 100).round()}%'),
+          _cell('On time', s.timed == 0 ? '—' : '${(s.onTimeRate * 100).round()}%'),
+          _cell('Overdue now', '${s.overdueNow}', s.overdueNow > 0 ? Colors.redAccent : null),
+        ]),
+        if (s.rated > 0) ...[
+          const SizedBox(height: 16),
+          const Text('Recall ratings', style: TextStyle(fontSize: 12, color: Colors.white54)),
+          const SizedBox(height: 6),
+          for (var i = 4; i >= 0; i--)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(children: [
+                SizedBox(width: 28, child: Text('★${i + 1}', style: const TextStyle(fontSize: 12, color: Colors.white70))),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                        value: maxD == 0 ? 0 : s.dist[i] / maxD, minHeight: 8, backgroundColor: Colors.white10, color: C.orange),
+                  ),
+                ),
+                SizedBox(width: 30, child: Text('${s.dist[i]}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.white70))),
+              ]),
+            ),
+        ],
+        if (s.subjects.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          const Text('By subject', style: TextStyle(fontSize: 12, color: Colors.white54)),
+          const SizedBox(height: 6),
+          for (final r in s.subjects)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(children: [
+                Expanded(child: Text(r.name, overflow: TextOverflow.ellipsis)),
+                Text('${r.revisions} rev${r.avg == null ? '' : ' · ★${r.avg!.toStringAsFixed(1)}'}  ',
+                    style: const TextStyle(fontSize: 12, color: Colors.white54)),
+                Text(r.confidence == null ? '—' : '${r.confidence}%',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: confColor(r.confidence))),
+              ]),
+            ),
+        ],
+        if (s.weakest.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          const Text('Least confident topics', style: TextStyle(fontSize: 12, color: Colors.white54)),
+          const SizedBox(height: 6),
+          for (final t in s.weakest)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(children: [
+                Expanded(child: Text('${t.title}  ·  ${t.subject}', overflow: TextOverflow.ellipsis)),
+                if (t.hard >= 2) Text('Hard ×${t.hard}  ', style: const TextStyle(fontSize: 12, color: Colors.white54)),
+                Text('${t.confidence}%', style: TextStyle(fontWeight: FontWeight.w700, color: confColor(t.confidence))),
+              ]),
+            ),
+        ],
+      ]),
+    );
   }
 }
