@@ -4,11 +4,13 @@ import 'pages.dart';
 import 'settings_page.dart';
 import 'extra.dart';
 import 'jobs_page.dart';
+import 'planner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppDb.init();
   await Prefs.init();
+  await Plan.init();
   await Extra.init();
   await Notifier.init();
   await TimerStore.sweep();
