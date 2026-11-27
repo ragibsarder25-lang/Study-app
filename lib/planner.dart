@@ -19,7 +19,8 @@ class Plan {
   static int lapseAt = 2; // revision rating <= this counts as a lapse
   static int lapseBack = 1; // steps moved back after a lapse
   static double minDays = 0.5, maxDays = 180;
-  static int budget = 240; // daily study time limit (min)
+  static int budget = 240; // daily study time limit (min), used by the forecast line
+  static int dailyCap = 10; // max scheduled revisions (topics) per day
   static int balance = 1; // move a revision up to +-N days off an overloaded day
   static int newPerDay = 3; // forecast pace for unstudied topics
   static int practiceMin = 10; // minutes per everyday-practice topic per day
@@ -38,6 +39,7 @@ class Plan {
         'minDays': minDays,
         'maxDays': maxDays,
         'budget': budget,
+        'dailyCap': dailyCap,
         'balance': balance,
         'newPerDay': newPerDay,
         'practiceMin': practiceMin,
@@ -64,6 +66,7 @@ class Plan {
     maxDays = f('maxDays', maxDays, 7, 730);
     if (maxDays < minDays) maxDays = minDays;
     budget = i('budget', budget, 30, 1440);
+    dailyCap = i('dailyCap', dailyCap, 1, 60);
     balance = i('balance', balance, 0, 7);
     newPerDay = i('newPerDay', newPerDay, 0, 50);
     practiceMin = i('practiceMin', practiceMin, 1, 120);
@@ -103,6 +106,7 @@ class Plan {
     minDays = 0.5;
     maxDays = 180;
     budget = 240;
+    dailyCap = 10;
     balance = 1;
     newPerDay = 3;
     practiceMin = 10;
@@ -159,32 +163,22 @@ class Plan {
     return _fold(rows);
   }
 
-  static Future<int> _fixed() async {
-    final r = await AppDb.db.rawQuery(
-        "SELECT SUM(CASE WHEN completedAt IS NOT NULL AND COALESCE(daily,0)=1 THEN 1 ELSE 0 END) d, "
-        "SUM(CASE WHEN completedAt IS NULL THEN 1 ELSE 0 END) n FROM topics WHERE COALESCE(finished,0)=0");
-    final d = (r.first['d'] as num?)?.toInt() ?? 0;
-    final n = (r.first['n'] as num?)?.toInt() ?? 0;
-    return d * practiceMin + math.min(n, newPerDay) * Prefs.studyMin;
-  }
-
-  // Moves a revision up to +-[balance] days off a day that would exceed the time limit.
+  // Moves a revision up to +-[balance] days off a day that already holds [dailyCap] revisions (a count of topics).
   static Future<DateTime> _balanced(DateTime t, int topicId, double span) async {
     if (balance <= 0 || span < 3) return t;
     final rows = await AppDb.db.rawQuery(
         "SELECT substr(nextRevision,1,10) d, COUNT(*) c FROM topics WHERE nextRevision IS NOT NULL "
         "AND COALESCE(daily,0)=0 AND COALESCE(finished,0)=0 AND id<>? GROUP BY d",
         [topicId]);
-    final load = {for (final r in rows) '${r['d']}': ((r['c'] as num).toInt()) * Prefs.revisionMin};
-    final fixed = await _fixed();
+    final load = {for (final r in rows) '${r['d']}': (r['c'] as num).toInt()};
     final now = DateTime.now();
     var best = 0, bestLoad = 1 << 30;
     for (var k = 0; k <= balance * 2; k++) {
       final off = k == 0 ? 0 : (k.isOdd ? -((k + 1) ~/ 2) : k ~/ 2);
       final c = DateTime(t.year, t.month, t.day + off, t.hour, t.minute);
       if (!c.isAfter(now)) continue;
-      final l = fixed + (load[dayKey(c)] ?? 0) + Prefs.revisionMin;
-      if (l <= budget) return c;
+      final l = (load[dayKey(c)] ?? 0) + 1;
+      if (l <= dailyCap) return c;
       if (l < bestLoad) {
         bestLoad = l;
         best = off;
@@ -419,5 +413,196 @@ class Plan {
       }
     }
     return out;
+  }
+
+  // ───────── Priority, confidence and statistics ─────────
+  // Everything here reads the intervals already configured in Settings (Prefs.intervals); nothing is duplicated.
+  static const recent = 5; // ratings that count towards "repeated hard" and confidence
+
+  /// How many of the last [recent] ratings were weak (<= weakAt). Oldest first.
+  static int hardCount(List<int> ratings) {
+    final r = ratings.length > recent ? ratings.sublist(ratings.length - recent) : ratings;
+    return r.where((x) => x <= weakAt).length;
+  }
+
+  /// Higher = revise first. Overdue days (max 30) and repeated hard ratings drive it.
+  static double priority({required int overdueDays, required int hard, int? latest}) =>
+      math.min(math.max(overdueDays, 0), 30) * 2.0 + hard * 3.0 + ((latest ?? 99) <= weakAt ? 2.0 : 0.0);
+
+  /// Confidence 0-100 from recent ratings (newer count more), scaled by how far the topic has
+  /// progressed through the configured intervals, minus a penalty for being overdue.
+  /// null = no ratings yet.
+  static int? confidence({
+    required List<int> ratings,
+    required int revisionCount,
+    required int overdueDays,
+    required int steps,
+  }) {
+    if (ratings.isEmpty) return null;
+    final r = ratings.length > recent ? ratings.sublist(ratings.length - recent) : ratings;
+    var sum = 0.0, den = 0.0;
+    for (var i = 0; i < r.length; i++) {
+      final w = i + 1.0;
+      sum += w * (r[i].clamp(1, 5) - 1) / 4;
+      den += w;
+    }
+    final stage = 0.7 + 0.3 * math.min(1.0, revisionCount / math.max(1, steps));
+    final pen = math.min(25, math.max(overdueDays, 0) * 3);
+    return (sum / den * 100 * stage - pen).round().clamp(0, 100).toInt();
+  }
+
+  static String confLabel(int? c) => c == null ? 'No data' : (c >= 70 ? 'High' : (c >= 40 ? 'Medium' : 'Low'));
+
+  /// Per-topic insight for every unfinished topic: ratings, repeated-hard count, overdue days, confidence, priority.
+  static Future<Map<int, TopicInsight>> insights() async {
+    final db = AppDb.db;
+    final topics = await db.rawQuery(
+        "SELECT t.id, t.title, t.revisionCount, t.nextRevision, t.completedAt, t.daily, s.name subject "
+        "FROM topics t JOIN subjects s ON s.id=t.subjectId WHERE COALESCE(t.finished,0)=0");
+    final rows = await db.rawQuery(
+        "SELECT topicId, rating FROM sessions WHERE completed=1 AND rating IS NOT NULL ORDER BY startedAt, id");
+    final byT = <int, List<int>>{};
+    for (final r in rows) {
+      final id = (r['topicId'] as num?)?.toInt();
+      if (id == null) continue;
+      byT.putIfAbsent(id, () => []).add((r['rating'] as num).toInt().clamp(1, 5).toInt());
+    }
+    final out = <int, TopicInsight>{};
+    for (final t in topics) {
+      final id = (t['id'] as num).toInt();
+      final ratings = byT[id] ?? const <int>[];
+      final due = DateTime.tryParse('${t['nextRevision'] ?? ''}');
+      final d = due == null ? 0 : daysFromToday(due);
+      final overdue = d < 0 ? -d : 0;
+      final hard = hardCount(ratings);
+            final latest = ratings.isEmpty ? null : ratings.last;
+      out[id] = TopicInsight(
+        id: id,
+        title: '${t['title']}',
+        subject: '${t['subject']}',
+        studied: t['completedAt'] != null,
+        daily: flagOf(t, 'daily'),
+        ratings: ratings,
+        hard: hard,
+        overdue: overdue,
+        latest: latest,
+        confidence: confidence(
+            ratings: ratings,
+            revisionCount: (t['revisionCount'] as num?)?.toInt() ?? 0,
+            overdueDays: overdue,
+            steps: Prefs.intervals.length),
+        priority: priority(overdueDays: overdue, hard: hard, latest: latest),
+      );
+    }
+    return out;
+  }
+}
+
+class TopicInsight {
+  final int id, hard, overdue;
+  final String title, subject;
+  final bool studied, daily;
+  final List<int> ratings;
+  final int? latest, confidence;
+  final double priority;
+  const TopicInsight({
+    required this.id,
+    required this.title,
+    required this.subject,
+    required this.studied,
+    required this.daily,
+    required this.ratings,
+    required this.hard,
+    required this.overdue,
+    required this.latest,
+    required this.confidence,
+    required this.priority,
+  });
+}
+
+class SubjectRevStat {
+  final String name;
+  final int revisions;
+  final double? avg;
+  final int? confidence;
+  const SubjectRevStat(this.name, this.revisions, this.avg, this.confidence);
+}
+
+/// Revision statistics for the Progress page.
+class RevisionStats {
+  int total = 0, last7 = 0, last30 = 0, rated = 0, lapses = 0, onTime = 0, timed = 0, overdueNow = 0, studied = 0;
+  double avgRecall = 0;
+  List<int> dist = List.filled(5, 0); // recall ratings 1..5
+  int? confidence; // mean confidence of studied topics
+  List<SubjectRevStat> subjects = [];
+  List<TopicInsight> weakest = [];
+
+  double get lapseRate => rated == 0 ? 0 : lapses / rated;
+  double get onTimeRate => timed == 0 ? 0 : onTime / timed;
+
+  static Future<RevisionStats> load() async {
+    final db = AppDb.db;
+    final s = RevisionStats();
+    final now = DateTime.now();
+    final rows = await db.rawQuery(
+        "SELECT x.kind, x.rating, x.startedAt, x.due, s.name subject FROM sessions x "
+        "JOIN topics t ON t.id=x.topicId JOIN subjects s ON s.id=t.subjectId "
+        "WHERE x.completed=1 AND x.kind IN ('revision','friday')");
+    final subjSum = <String, double>{};
+    final subjN = <String, int>{};
+    final subjRev = <String, int>{};
+    var sum = 0;
+    for (final r in rows) {
+      s.total++;
+      final at = DateTime.tryParse('${r['startedAt']}');
+      if (at != null) {
+        final age = now.difference(at).inDays;
+        if (age < 7) s.last7++;
+        if (age < 30) s.last30++;
+      }
+      final name = '${r['subject']}';
+      subjRev[name] = (subjRev[name] ?? 0) + 1;
+      final rating = (r['rating'] as num?)?.toInt();
+      if (rating != null) {
+        final v = rating.clamp(1, 5).toInt();
+        s.rated++;
+        sum += v;
+        s.dist[v - 1]++;
+        subjSum[name] = (subjSum[name] ?? 0) + v;
+        subjN[name] = (subjN[name] ?? 0) + 1;
+        if (r['kind'] == 'revision' && v <= lapseAt) s.lapses++;
+      }
+      final due = r['due'];
+      if (r['kind'] == 'revision' && due != null && at != null) {
+        s.timed++;
+        if (dayKey(at).compareTo('${due}'.substring(0, math.min(10, '${due}'.length))) <= 0) s.onTime++;
+      }
+    }
+    s.avgRecall = s.rated == 0 ? 0 : sum / s.rated;
+
+    final ins = (await Plan.insights()).values.where((t) => t.studied).toList();
+    s.studied = ins.length;
+    s.overdueNow = ins.where((t) => !t.daily && t.overdue > 0).length;
+    final confs = ins.map((t) => t.confidence).whereType<int>().toList();
+    s.confidence = confs.isEmpty ? null : (confs.reduce((a, b) => a + b) / confs.length).round();
+
+    final subjConf = <String, List<int>>{};
+    for (final t in ins) {
+      if (t.confidence != null) subjConf.putIfAbsent(t.subject, () => []).add(t.confidence!);
+    }
+    final names = {...subjRev.keys, ...subjConf.keys}.toList()..sort();
+    s.subjects = [
+      for (final n in names)
+        SubjectRevStat(
+          n,
+          subjRev[n] ?? 0,
+          (subjN[n] ?? 0) == 0 ? null : subjSum[n]! / subjN[n]!,
+          subjConf[n] == null ? null : (subjConf[n]!.reduce((a, b) => a + b) / subjConf[n]!.length).round(),
+        )
+    ];
+    final rated = ins.where((t) => t.confidence != null).toList()
+      ..sort((a, b) => a.confidence!.compareTo(b.confidence!));
+    s.weakest = rated.take(5).toList();
+    return s;
   }
 }
