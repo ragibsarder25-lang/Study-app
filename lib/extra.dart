@@ -56,12 +56,12 @@ class Extra {
         await Notifier.at(3000 + i, d, 'StudyOS – Daily reminder', 'Time to study and review your topics.', force: true);
       }
     }
-    // Friday full-review reminder, 5 PM on each upcoming Friday.
+    // Friday weak-topic spiral review reminder, 5 PM on each upcoming Friday.
     if (Prefs.fridayReview) {
       for (var i = 0; i < horizonDays; i++) {
         final d = DateTime(now.year, now.month, now.day + i, 17, 0);
         if (d.weekday == DateTime.friday) {
-          await Notifier.at(3100 + i, d, 'StudyOS – Friday review', 'Time for your full weekly review.');
+          await Notifier.at(3100 + i, d, 'StudyOS – Friday spiral review', 'Time to revisit your weak topics.');
         }
       }
     }
