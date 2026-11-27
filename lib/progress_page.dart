@@ -66,6 +66,7 @@ class _ProgressPageState extends State<ProgressPage> {
           const SizedBox(width: 10),
           stat(Icons.replay, C.green, 'Revisions', '${stats.revisionSessions}'),
         ]),
+        const RevisionStatsCard(),
         const ForecastCard(),
         Panel(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
