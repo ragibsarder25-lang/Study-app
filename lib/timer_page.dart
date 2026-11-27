@@ -152,8 +152,22 @@ class _TimerPageState extends State<TimerPage> {
 
   // Difficulty (study) / recall (revision) stars. "Later" skips; a reminder notification is already set.
   Future<void> _rate(int? sid) async {
-    if (sid == null || !mounted || !Plan.wants(widget.kind)) return;
+    if (sid == null || !mounted) return;
+    if (widget.kind == 'revision') await _rateMissingStudy();
+    if (!mounted || !Plan.wants(widget.kind)) return;
     await rateSession(context, sid, widget.title, widget.kind);
+  }
+
+  // If the study session of this topic was never rated, ask for its difficulty now.
+  Future<void> _rateMissingStudy() async {
+    final r = await AppDb.db.query('sessions',
+        columns: ['id', 'rating'],
+        where: "topicId=? AND kind='new' AND completed=1",
+        whereArgs: [widget.topicId],
+        orderBy: 'id DESC',
+        limit: 1);
+    if (r.isEmpty || r.first['rating'] != null || !mounted) return;
+    await rateSession(context, r.first['id'] as int, widget.title, 'new');
   }
 
   Future<void> reset() async {
