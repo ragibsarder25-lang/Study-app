@@ -120,9 +120,7 @@ class Notifier {
       await a?.requestNotificationsPermission();
       await a?.requestExactAlarmsPermission();
     } catch (_) {}
-  }
-
-  static const _native = MethodChannel('study/alarm');
+  }  static const _native = MethodChannel('study/alarm');
 
   // Native AlarmManager (setAlarmClock) + BroadcastReceiver: fires even when the app is closed.
   static Future<void> at(int id, DateTime when, String title, String body, {bool force = false}) async {
@@ -230,9 +228,7 @@ class ActiveTimer {
       return null;
     }
   }
-}
-
-class TimerStore {
+}class TimerStore {
   static SharedPreferences? _p;
   static bool _busy = false;
 
@@ -341,9 +337,7 @@ class TimerStore {
     await _clear(slot);
     await Notifier.cancel(idOf(slot));
     await Notifier.cancel(idOf(slot) + 2);
-  }
-
-  // Records the session and schedules the next revision. Safe to call twice.
+  }  // Records the session and schedules the next revision. Safe to call twice.
   static Future<int?> finalize(ActiveTimer t) async {
     final left = t.leftMs();
     final early = left > 0;
@@ -466,9 +460,7 @@ class TimerStore {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}
-
-// ───────── Database (schema v5: topics.daily/finished, sessions.rating) ─────────
+}// ───────── Database (schema v5: topics.daily/finished, sessions.rating) ─────────
 class AppDb {
   static late Database db;
 
@@ -541,18 +533,6 @@ class AppDb {
     final ids = await db.query('topics', columns: ['id'], where: 'subjectId=?', whereArgs: [id]);
     await db.transaction((txn) async {
       await txn.rawDelete('DELETE FROM sessions WHERE topicId IN (SELECT id FROM topics WHERE subjectId=?)', [id]);
-      await txn.delete(  static Future<void> deleteTopic(int id) async {
-    await db.transaction((txn) async {
-      await txn.delete('sessions', where: 'topicId=?', whereArgs: [id]);
-      await txn.delete('topics', where: 'id=?', whereArgs: [id]);
-    });
-    await Notifier.cancelRevision(id);
-  }
-
-  static Future<void> deleteSubject(int id) async {
-    final ids = await db.query('topics', columns: ['id'], where: 'subjectId=?', whereArgs: [id]);
-    await db.transaction((txn) async {
-      await txn.rawDelete('DELETE FROM sessions WHERE topicId IN (SELECT id FROM topics WHERE subjectId=?)', [id]);
       await txn.delete('topics', where: 'subjectId=?', whereArgs: [id]);
       await txn.delete('subjects', where: 'id=?', whereArgs: [id]);
     });
@@ -560,9 +540,7 @@ class AppDb {
       await Notifier.cancelRevision(r['id'] as int);
     }
   }
-}
-
-// ───────── Helpers / stats ─────────
+}// ───────── Helpers / stats ─────────
 bool flagOf(Map<String, dynamic> t, String k) => ((t[k] as num?)?.toInt() ?? 0) == 1;
 
 String starsText(Object? r) {
