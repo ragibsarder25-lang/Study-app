@@ -23,6 +23,7 @@ class Plan {
   static int balance = 1; // move a revision up to +-N days off an overloaded day
   static int newPerDay = 3; // forecast pace for unstudied topics
   static int practiceMin = 10; // minutes per everyday-practice topic per day
+  static const int weakAt = 3; // latest rating <= this = weak topic (same rule as Review -> Needs review)
   static int horizon = 14; // forecast days
   static int notifyMin = 3; // remind this many minutes after leaving unrated
   static bool askNew = true, askRev = true, notify = true;
@@ -120,7 +121,7 @@ class Plan {
     if (!have.contains('rcb')) await AppDb.db.execute('ALTER TABLE sessions ADD COLUMN rcb INTEGER');
   }
 
-    // ───────── Core math ─────────
+  // ───────── Core math ─────────
   static Duration _dur(double d) => Duration(minutes: (d * 1440).round());
   static DateTime _tomorrow(DateTime d) => DateTime(d.year, d.month, d.day + 1);
 
@@ -222,10 +223,10 @@ class Plan {
   }
 
   // ───────── Rating ─────────
-  static bool wants(String kind) => (kind == 'new' && askNew) || (kind == 'revision' && askRev);
+  static bool wants(String kind) => (kind == 'new' && askNew) || ((kind == 'revision' || kind == 'friday') && askRev);
 
   static String get kindsSql {
-    final k = [if (askNew) "'new'", if (askRev) "'revision'"];
+    final k = [if (askNew) "'new'", if (askRev) "'revision'", if (askRev) "'friday'"];
     return k.isEmpty ? "('none')" : '(${k.join(',')})';
   }
 
@@ -286,7 +287,9 @@ class Plan {
           where: 'id=?', whereArgs: [tid]);
     }
     await Notifier.refreshTopic(tid);
-  }  /// Re-plans one topic's upcoming revision from its latest session and rating history.
+  }
+
+  /// Re-plans one topic's upcoming revision from its latest session and rating history.
   /// Returns false when nothing needed to change (no revision scheduled, already due, daily or finished).
   static Future<bool> _replanRow(Map<String, Object?> t, DateTime now) async {
     final db = AppDb.db;
@@ -329,6 +332,33 @@ class Plan {
     }
     await Notifier.rescheduleAll();
     return n;
+  }
+
+  // ───────── Weak topics / hardest-first / study rating ─────────
+  /// Latest star rating per topic (study, revision or Friday review). Same rule as Review -> Needs review.
+  static Future<Map<int, int>> latestRatings() async {
+    final rows = await AppDb.db.rawQuery(
+        "SELECT topicId, rating FROM sessions WHERE completed=1 AND rating IS NOT NULL ORDER BY startedAt, id");
+    final m = <int, int>{};
+    for (final r in rows) {
+      final id = (r['topicId'] as num?)?.toInt();
+      if (id == null) continue;
+      m[id] = (r['rating'] as num).toInt().clamp(1, 5).toInt();
+    }
+    return m;
+  }
+
+  /// Latest difficulty rating given after studying (kind 'new') per topic.
+  static Future<Map<int, int>> studyRatings() async {
+    final rows = await AppDb.db.rawQuery(
+        "SELECT topicId, rating FROM sessions WHERE completed=1 AND kind='new' AND rating IS NOT NULL ORDER BY startedAt, id");
+    final m = <int, int>{};
+    for (final r in rows) {
+      final id = (r['topicId'] as num?)?.toInt();
+      if (id == null) continue;
+      m[id] = (r['rating'] as num).toInt().clamp(1, 5).toInt();
+    }
+    return m;
   }
 
   // ───────── Forecast: new study, scheduled revision and everyday practice kept apart ─────────
@@ -390,4 +420,4 @@ class Plan {
     }
     return out;
   }
-}
+}p8j2
