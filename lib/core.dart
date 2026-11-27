@@ -369,6 +369,9 @@ class TimerStore {
         'minutes': mins,
         'startedAt': startedAt,
         'completed': 1,
+        // Lets Plan.rate() and the statistics know which revision this was and when it was due.
+        if (t.kind == 'revision' && topic != null) 'due': topic['nextRevision'], // NEW
+        if (t.kind == 'revision' && topic != null) 'rcb': (topic['revisionCount'] as num?)?.toInt() ?? 0, // NEW
       });
       if (topic != null && t.kind == 'new') {
         next = _isDaily(topic) ? _startOfTomorrow(doneAt) : doneAt.add(Duration(days: Prefs.afterNew()));
@@ -463,7 +466,9 @@ class TimerStore {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}// ───────── Database (schema v4: topics.daily/finished, sessions.rating) ─────────
+}
+
+// ───────── Database (schema v4: topics.daily/finished, sessions.rating) ─────────
 class AppDb {
   static late Database db;
 
@@ -487,7 +492,7 @@ class AppDb {
           id INTEGER PRIMARY KEY AUTOINCREMENT, subjectId INTEGER NOT NULL,
           title TEXT NOT NULL, notes TEXT DEFAULT '', createdAt TEXT NOT NULL,
           completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT,
-          daily INTEGER DEFAULT 0, finished INTEGER DEFAULT 0
+           finished INTEGER DEFAULT 0
         )''');
         await db.execute('''CREATE TABLE sessions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, topicId INTEGER, kind TEXT NOT NULL,
