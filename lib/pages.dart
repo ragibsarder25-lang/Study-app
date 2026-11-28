@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:sqflite/sqflite.dart';
 import 'core.dart';
 import 'jobs_page.dart';
 import 'plan_ui.dart';
@@ -20,7 +22,9 @@ class Dashboard extends StatefulWidget {
 class _DashboardState extends State<Dashboard> {
   List<Map<String, dynamic>> revisions = [], newTopics = [], upcoming = [], friday = [], jobDates = [], practice = [];
   Map<int, int> studyR = {};
-  int pendingRate = 0;
+  Map<int, TopicInsight> insights = {};
+  int pendingRate = 0, backlog = 0, dueTotal = 0, capLeft = 0;
+  bool overCap = false, showAll = false;
   List<ActiveTimer> active = [];
   Stats stats = Stats();
   Timer? tick;
@@ -72,10 +76,13 @@ class _DashboardState extends State<Dashboard> {
       upcoming = await AppDb.db.rawQuery("$base WHERE t.nextRevision IS NOT NULL AND t.nextRevision > ? ORDER BY t.nextRevision LIMIT 3", [nowS]);
       final rated = await Plan.latestRatings();
       studyR = await Plan.studyRatings();
+      insights = await Plan.insights();
+      double prio(Map<String, dynamic> t) => insights[t['id'] as int]?.priority ?? 0;
       // Friday = review of the previous 6 days (everything studied or revised since last Saturday), hardest first.
       friday = (now.weekday == DateTime.friday && Prefs.fridayReview)
           ? await AppDb.db.rawQuery(
               "$base WHERE t.completedAt IS NOT NULL AND COALESCE(t.finished,0)=0 "
+              "AND NOT (COALESCE(t.daily,0)=1 AND COALESCE(t.noreview,0)=1) "
               "AND t.id IN (SELECT topicId FROM sessions WHERE completed=1 AND kind IN ('new','revision') "
               "AND substr(startedAt,1,10)>=? AND substr(startedAt,1,10)<?) "
               "AND t.id NOT IN (SELECT topicId FROM sessions WHERE kind='friday' AND completed=1 AND substr(startedAt,1,10)=?) "
@@ -104,12 +111,22 @@ class _DashboardState extends State<Dashboard> {
       practice = practice.where((t) => !busy(t, 'revision')).toList();
       newTopics = newTopics.where((t) => !busy(t, 'new')).toList();
       friday = friday.where((t) => !busy(t, 'friday')).toList();
-      // Hardest first (lowest latest rating, unrated = neutral 3), then longest overdue.
-      int hard(Map<String, dynamic> t) => rated[t['id'] as int] ?? 3;
+      // Priority: longest overdue and repeatedly-hard topics first (see Plan.priority).
       revisions.sort((a, b) {
-        final c = hard(a).compareTo(hard(b));
+        final c = prio(b).compareTo(prio(a));
         return c != 0 ? c : '${a['nextRevision']}'.compareTo('${b['nextRevision']}');
       });
+      // Number-based daily capacity: today's list holds at most Plan.dailyCap revisions, counting those already done.
+      final doneToday = Sqflite.firstIntValue(await AppDb.db.rawQuery(
+              "SELECT COUNT(*) FROM sessions WHERE completed=1 AND kind='revision' AND substr(startedAt,1,10)=?",
+              [dayKey(now)])) ??
+          0;
+      capLeft = math.max(0, Plan.dailyCap - doneToday);
+      dueTotal = revisions.length + practice.length;
+      overCap = revisions.length > capLeft;
+      final allDue = revisions;
+      revisions = showAll ? allDue : allDue.take(capLeft).toList();
+      backlog = allDue.length - revisions.length;
       stats = await Stats.load();
     } finally {
       loading = false;
@@ -132,7 +149,9 @@ class _DashboardState extends State<Dashboard> {
         if (isFriday)
           _section('Friday review · last 6 days', friday, 'friday', 'Nothing studied in the last 6 days, or all reviewed. Great work!')
         else ...[
-          _section('Revision', revisions, 'revision', 'No revisions due.'),
+          _section('Revision', revisions, 'revision',
+              backlog > 0 ? 'Daily limit of ${Plan.dailyCap} reached.' : 'No revisions due.'),
+          if (overCap) _backlogTile(),
           const SizedBox(height: 14),
           if (practice.isNotEmpty) ...[
             _section('Everyday practice', practice, 'revision', ''),
@@ -165,13 +184,11 @@ class _DashboardState extends State<Dashboard> {
           const SizedBox(width: 10),
           _pill(Icons.timer_outlined, fmtMin(stats.todayMin), 'today'),
           const SizedBox(width: 10),
-          _pill(Icons.event_repeat, '${(DateTime.now().weekday == DateTime.friday && Prefs.fridayReview) ? friday.length : revisions.length + practice.length}', 'due'),
+          _pill(Icons.event_repeat, '${(DateTime.now().weekday == DateTime.friday && Prefs.fridayReview) ? friday.length : dueTotal}', 'due'),
         ]),
       ]),
     );
-  }
-
-  Widget _pill(IconData icon, String value, String label) => Expanded(
+  }  Widget _pill(IconData icon, String value, String label) => Expanded(
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
           decoration: BoxDecoration(color: Colors.black.withOpacity(0.22), borderRadius: BorderRadius.circular(16)),
@@ -214,7 +231,29 @@ class _DashboardState extends State<Dashboard> {
           ),
           const Text('Rate', style: TextStyle(color: C.orange, fontWeight: FontWeight.w700)),
         ]),
-      );  Widget _activeSection() {
+      );
+
+  // Row under the Revision list that reveals revisions beyond the daily limit.
+  Widget _backlogTile() => Panel(
+        onTap: () {
+          setState(() => showAll = !showAll);
+          load();
+        },
+        child: Row(children: [
+          const IconBadge(Icons.layers_outlined, C.cyan),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+                showAll
+                    ? 'Showing all due revisions (limit ${Plan.dailyCap}/day)'
+                    : '$backlog more due beyond today\'s limit of ${Plan.dailyCap}',
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          ),
+          Text(showAll ? 'Hide' : 'Show all', style: const TextStyle(color: C.cyan, fontWeight: FontWeight.w700)),
+        ]),
+      );
+
+  Widget _activeSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _heading('In progress', active.length),
       ...active.map((a) {
@@ -343,14 +382,19 @@ class _DashboardState extends State<Dashboard> {
       if (open) ...list.map((t) => _tile(t, kind)),
       const SizedBox(height: 4),
     ]);
-  }  Widget _tile(Map<String, dynamic> t, String kind) {
+  }
+
+  Widget _tile(Map<String, dynamic> t, String kind) {
     String sub;
     Color color;
     IconData icon;
     if (kind == 'revision') {
       final days = daysFromToday(DateTime.parse(t['nextRevision'] as String));
       final sr = studyR[t['id'] as int];
-      sub = '${days < 0 ? 'Overdue ${-days}d' : 'Due now'}  ·  Study ${sr == null ? 'not rated' : '★$sr'}';
+      final ti = insights[t['id'] as int];
+      sub = '${days < 0 ? 'Overdue ${-days}d' : 'Due now'}  ·  Study ${sr == null ? 'not rated' : '★$sr'}'
+          '${ti?.confidence == null ? '' : '  ·  Confidence ${ti!.confidence}%'}'
+          '${(ti?.hard ?? 0) >= 2 ? '  ·  Hard ×${ti!.hard}' : ''}';
       color = days < 0 ? Colors.redAccent : C.orange;
       icon = Icons.refresh_rounded;
     } else if (kind == 'friday') {
@@ -413,15 +457,15 @@ class _DashboardState extends State<Dashboard> {
     await load();
     widget.onChanged();
   }
-}
-
-// ───────────────────────── Subjects ─────────────────────────
+}// ───────────────────────── Subjects ─────────────────────────
 Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<String, dynamic>? topic}) async {
   final title = TextEditingController(text: (topic?['title'] ?? '') as String);
   final notes = TextEditingController(text: (topic?['notes'] ?? '') as String);
   var changed = false;
   var daily = ((topic?['daily'] as num?)?.toInt() ?? 0) == 1;
   final wasDaily = daily;
+  var noRev = topic != null && flagOf(topic, 'noreview');
+  final wasNoRev = noRev;
   var finishedFlag = topic != null && flagOf(topic, 'finished');
   final wasFinished = finishedFlag;
   await showDialog(
@@ -451,6 +495,15 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
           title: const Text('Repeat every day'),
           subtitle: const Text('e.g. vocabulary — comes back daily, ignoring the revision intervals'),
         ),
+        if (daily)
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            value: noRev,
+            onChanged: (v) => setD(() => noRev = v ?? false),
+            title: const Text("Doesn't need review"),
+            subtitle: const Text('Once completed, it stops coming back every day'),
+          ),
         if (topic != null && topic['completedAt'] != null)
           CheckboxListTile(
             contentPadding: EdgeInsets.zero,
@@ -485,11 +538,27 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   'notes': notes.text.trim(),
                   'createdAt': DateTime.now().toIso8601String(),
                   'revisionCount': 0,
-                  'daily': daily ? 1 : 0
+                  'daily': daily ? 1 : 0,
+                  'noreview': (daily && noRev) ? 1 : 0
                 });
               } else {
-                final upd = <String, Object?>{'title': t, 'notes': notes.text.trim(), 'daily': daily ? 1 : 0};
-                if (daily && !wasDaily && topic['completedAt'] != null) {
+                final upd = <String, Object?>{
+                  'title': t,
+                  'notes': notes.text.trim(),
+                  'daily': daily ? 1 : 0,
+                  'noreview': (daily && noRev) ? 1 : 0
+                };
+                final wasEff = wasDaily && wasNoRev, nowEff = daily && noRev;
+                if (topic['completedAt'] != null) {
+                  // Already studied: "no review" removes it from the daily list; clearing it brings it back from tomorrow.
+                  if (nowEff && !wasEff) {
+                    upd['nextRevision'] = null;
+                  } else if (!nowEff && wasEff) {
+                    final n = DateTime.now();
+                    upd['nextRevision'] = DateTime(n.year, n.month, n.day + 1).toIso8601String();
+                  }
+                }
+                if (daily && !noRev && !wasDaily && topic['completedAt'] != null) {
                   // Already studied: make it due from tomorrow at the latest.
                   final n = DateTime.now();
                   final cap = DateTime(n.year, n.month, n.day + 1);
@@ -497,7 +566,7 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
                   if (cur == null || cur.isAfter(cap)) upd['nextRevision'] = cap.toIso8601String();
                 }
                 await AppDb.db.update('topics', upd, where: 'id=?', whereArgs: [topic['id']]);
-                if (daily != wasDaily) await Notifier.rescheduleAll(); // add/remove its alarm
+                if (daily != wasDaily || (daily && noRev != wasNoRev)) await Notifier.rescheduleAll(); // add/remove its alarm
                 if (finishedFlag != wasFinished) {
                   if (finishedFlag) {
                     await AppDb.markFinished(topic['id'] as int);
@@ -516,7 +585,9 @@ Future<bool> topicDialog(BuildContext context, {required int subjectId, Map<Stri
     ),
   );
   return changed;
-}class SubjectsPage extends StatefulWidget {
+}
+
+class SubjectsPage extends StatefulWidget {
   final VoidCallback onChanged;
   const SubjectsPage({super.key, required this.onChanged});
   @override
@@ -672,7 +743,10 @@ class _TopicListState extends State<TopicList> {
   String status(Map<String, dynamic> t) {
     if (flagOf(t, 'finished')) return 'Fully finished';
     final next = t['nextRevision'] as String?;
-    if (next == null) return 'Not studied yet';
+    if (next == null) {
+      if (t['completedAt'] == null) return 'Not studied yet';
+      return Plan.noReviewDaily(t) ? 'Studied · no daily review' : 'Studied';
+    }
     final d = daysFromToday(DateTime.parse(next));
     if (d < 0) return 'Revision overdue ${-d}d';
     if (d == 0) return 'Revision due today';
@@ -707,8 +781,10 @@ class _TopicListState extends State<TopicList> {
                 IconBadge(
                     fin
                         ? Icons.verified_outlined
-                        : (next == null ? Icons.fiber_new_outlined : (overdue ? Icons.refresh_rounded : Icons.check_circle_outline)),
-                    fin ? C.green : (next == null ? C.accent : (overdue ? C.orange : C.green))),
+                        : (next == null
+                            ? (t['completedAt'] == null ? Icons.fiber_new_outlined : Icons.check_circle_outline)
+                            : (overdue ? Icons.refresh_rounded : Icons.check_circle_outline)),
+                    fin ? C.green : (next == null ? (t['completedAt'] == null ? C.accent : C.green) : (overdue ? C.orange : C.green))),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -721,11 +797,11 @@ class _TopicListState extends State<TopicList> {
                     ],
                   ]),
                 ),
-                if (next != null || fin)
+                if (next != null || fin || Plan.noReviewDaily(t))
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                     decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
-                    child: Text(fin ? 'Done' : (flagOf(t, 'daily') ? 'Daily' : 'R$rc'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                    child: Text(fin ? 'Done' : (Plan.noReviewDaily(t) ? 'No review' : (flagOf(t, 'daily') ? 'Daily' : 'R$rc')), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                   ),
               ]),
             );
