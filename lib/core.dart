@@ -120,7 +120,9 @@ class Notifier {
       await a?.requestNotificationsPermission();
       await a?.requestExactAlarmsPermission();
     } catch (_) {}
-  }  static const _native = MethodChannel('study/alarm');
+  }
+
+  static const _native = MethodChannel('study/alarm');
 
   // Native AlarmManager (setAlarmClock) + BroadcastReceiver: fires even when the app is closed.
   static Future<void> at(int id, DateTime when, String title, String body, {bool force = false}) async {
@@ -169,9 +171,7 @@ class Notifier {
     } catch (_) {} // table not created yet
     await TimerStore.rearmAll();
   }
-}
-
-// ───────── Persistent timers ─────────
+}// ───────── Persistent timers ─────────
 class ActiveTimer {
   final String slot, kind, title, subject;
   final int topicId, minutes;
@@ -228,7 +228,9 @@ class ActiveTimer {
       return null;
     }
   }
-}class TimerStore {
+}
+
+class TimerStore {
   static SharedPreferences? _p;
   static bool _busy = false;
 
@@ -337,7 +339,9 @@ class ActiveTimer {
     await _clear(slot);
     await Notifier.cancel(idOf(slot));
     await Notifier.cancel(idOf(slot) + 2);
-  }  // Records the session and schedules the next revision. Safe to call twice.
+  }
+
+  // Records the session and schedules the next revision. Safe to call twice.
   static Future<int?> finalize(ActiveTimer t) async {
     final left = t.leftMs();
     final early = left > 0;
@@ -460,7 +464,7 @@ class ActiveTimer {
       if (t != null && t.running && t.leftMs() > 0) await _arm(t);
     }
   }
-}// ───────── Database (schema v5: topics.daily/finished, sessions.rating) ─────────
+}// ───────── Database (schema v6: topics.daily/finished/noreview, sessions.rating) ─────────
 class AppDb {
   static late Database db;
 
@@ -472,10 +476,11 @@ class AppDb {
   static Future<void> init() async {
     db = await openDatabase(
       p.join(await getDatabasesPath(), 'recursive_study.db'),
-      version: 5, // 5: repairs installs created without topics.daily
+      version: 6, // 6: adds topics.noreview
       onUpgrade: (db, oldV, newV) async {
         await _addCol(db, 'topics', 'daily', 'INTEGER DEFAULT 0');
         await _addCol(db, 'topics', 'finished', 'INTEGER DEFAULT 0');
+        await _addCol(db, 'topics', 'noreview', 'INTEGER DEFAULT 0');
         await _addCol(db, 'sessions', 'rating', 'INTEGER');
       },
       onCreate: (db, v) async {
@@ -484,7 +489,7 @@ class AppDb {
           id INTEGER PRIMARY KEY AUTOINCREMENT, subjectId INTEGER NOT NULL,
           title TEXT NOT NULL, notes TEXT DEFAULT '', createdAt TEXT NOT NULL,
           completedAt TEXT, revisionCount INTEGER DEFAULT 0, nextRevision TEXT,
-          daily INTEGER DEFAULT 0, finished INTEGER DEFAULT 0
+          daily INTEGER DEFAULT 0, finished INTEGER DEFAULT 0, noreview INTEGER DEFAULT 0
         )''');
         await db.execute('''CREATE TABLE sessions(
           id INTEGER PRIMARY KEY AUTOINCREMENT, topicId INTEGER, kind TEXT NOT NULL,
@@ -540,7 +545,9 @@ class AppDb {
       await Notifier.cancelRevision(r['id'] as int);
     }
   }
-}// ───────── Helpers / stats ─────────
+}
+
+// ───────── Helpers / stats ─────────
 bool flagOf(Map<String, dynamic> t, String k) => ((t[k] as num?)?.toInt() ?? 0) == 1;
 
 String starsText(Object? r) {
