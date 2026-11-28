@@ -2,7 +2,7 @@ import sys
 f = sys.argv[1]
 s = open(f).read()
 perms = [
-    "INTERNET", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM", "RECEIVE_BOOT_COMPLETED",
+    "MANAGE_EXTERNAL_STORAGE", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM", "RECEIVE_BOOT_COMPLETED",
     "VIBRATE", "WAKE_LOCK", "USE_FULL_SCREEN_INTENT", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
 ]
 p = "".join('    <uses-permission android:name="android.permission.%s"/>\n' % x for x in perms)
@@ -17,7 +17,7 @@ receivers = """
             </intent-filter>
         </receiver>
 """
-s = s.replace("<application", p + "    <application", 1)
+s = s.replace("<application", p + "    <application android:requestLegacyExternalStorage=\"true\"", 1)
 s = s.replace("</application>", receivers + "    </application>", 1)
 s = s.replace('android:label="recursive_study"', 'android:label="Recursive Study"')
 open(f, "w").write(s)
