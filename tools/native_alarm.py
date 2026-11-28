@@ -92,15 +92,13 @@ object Alarms {
             ch.setSound(sound, AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-            ch.enableVibration(true)
-            ch.vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
+            ch.enableVibration(false)
             ch.lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             nm.createNotificationChannel(ch)
             b = android.app.Notification.Builder(ctx, CHANNEL)
         } else {
             @Suppress("DEPRECATION")
             b = android.app.Notification.Builder(ctx).setSound(sound)
-                .setVibrate(longArrayOf(0, 600, 300, 600, 300, 600))
                 .setPriority(android.app.Notification.PRIORITY_MAX)
         }
         b.setSmallIcon(ctx.applicationInfo.icon)
