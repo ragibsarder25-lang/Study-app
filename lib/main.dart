@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'autosave.dart';
 import 'core.dart';
 import 'pages.dart';
 import 'settings_page.dart';
@@ -49,6 +50,7 @@ class _BootState extends State<Boot> {
       'Timers': TimerStore.sweep,
       'Reminders': Notifier.rescheduleAll,
       'Daily reminders': Extra.applyDaily,
+      'Auto-backup': Autosave.start,
     };
     final errors = <String>[];
     for (final e in steps.entries) {
@@ -126,6 +128,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Autosave.offerSetup(context, refresh);
+    });
   }
 
   @override
@@ -139,6 +144,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       await TimerStore.sweep();
       if (mounted) setState(() {});
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      Autosave.save();
     }
   }
 
