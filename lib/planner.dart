@@ -123,9 +123,7 @@ class Plan {
     final have = info.map((c) => '${c['name']}').toSet();
     if (!have.contains('due')) await AppDb.db.execute('ALTER TABLE sessions ADD COLUMN due TEXT');
     if (!have.contains('rcb')) await AppDb.db.execute('ALTER TABLE sessions ADD COLUMN rcb INTEGER');
-  }
-
-  // ───────── Core math ─────────
+  }  // ───────── Core math ─────────
   static Duration _dur(double d) => Duration(minutes: (d * 1440).round());
   static DateTime _tomorrow(DateTime d) => DateTime(d.year, d.month, d.day + 1);
 
@@ -238,6 +236,14 @@ class Plan {
       "SELECT x.id, x.kind, x.startedAt, t.title FROM sessions x JOIN topics t ON t.id=x.topicId "
       "WHERE x.completed=1 AND x.rating IS NULL AND x.kind IN $kindsSql ORDER BY x.startedAt LIMIT 50");
 
+  /// True when a topic has been studied but has no revision scheduled and is not a daily-practice topic.
+  // ✅ FIX: added missing method referenced in pages.dart lines 748, 800, 804
+  static bool noReviewDaily(Map<String, dynamic> t) =>
+      t['completedAt'] != null &&
+      !flagOf(t, 'daily') &&
+      t['nextRevision'] == null &&
+      !flagOf(t, 'finished');
+
   /// Saves a rating and re-plans the topic from it (only if it is the topic's latest session).
   static Future<void> rate(int sid, int stars) async {
     final db = AppDb.db;
@@ -326,9 +332,7 @@ class Plan {
     }
     await Notifier.rescheduleAll();
     return n;
-  }
-
-  // ───────── Weak topics / hardest-first / study rating ─────────
+  }  // ───────── Weak topics / hardest-first / study rating ─────────
   /// Latest star rating per topic (study, revision or Friday review). Same rule as Review -> Needs review.
   static Future<Map<int, int>> latestRatings() async {
     final rows = await AppDb.db.rawQuery(
@@ -416,7 +420,6 @@ class Plan {
   }
 
   // ───────── Priority, confidence and statistics ─────────
-  // Everything here reads the intervals already configured in Settings (Prefs.intervals); nothing is duplicated.
   static const recent = 5; // ratings that count towards "repeated hard" and confidence
 
   /// How many of the last [recent] ratings were weak (<= weakAt). Oldest first.
@@ -475,7 +478,7 @@ class Plan {
       final d = due == null ? 0 : daysFromToday(due);
       final overdue = d < 0 ? -d : 0;
       final hard = hardCount(ratings);
-            final latest = ratings.isEmpty ? null : ratings.last;
+      final latest = ratings.isEmpty ? null : ratings.last;
       out[id] = TopicInsight(
         id: id,
         title: '${t['title']}',
