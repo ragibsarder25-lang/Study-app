@@ -144,6 +144,30 @@ class _SettingsPageState extends State<SettingsPage> {
                 }
               },
             ),
+          SwitchListTile(
+            title: const Text('Missed-day alert'),
+            subtitle: Text(
+                'At ${Extra.nudgeHour.toString().padLeft(2, '0')}:${Extra.nudgeMinute.toString().padLeft(2, '0')} if the app was not opened that day'),
+            value: Extra.nudge,
+            onChanged: (v) {
+              Extra.nudge = v;
+              _persist();
+            },
+          ),
+          if (Extra.nudge)
+            ListTile(
+              title: const Text('Missed-day alert time'),
+              trailing: const Icon(Icons.access_time),
+              onTap: () async {
+                final t = await showTimePicker(
+                    context: context, initialTime: TimeOfDay(hour: Extra.nudgeHour, minute: Extra.nudgeMinute));
+                if (t != null) {
+                  Extra.nudgeHour = t.hour;
+                  Extra.nudgeMinute = t.minute;
+                  _persist();
+                }
+              },
+            ),
         ]),
       ),
       Panel(
