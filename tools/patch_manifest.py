@@ -2,7 +2,7 @@ import sys
 f = sys.argv[1]
 s = open(f).read()
 perms = [
-    "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM", "RECEIVE_BOOT_COMPLETED",
+    "INTERNET", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM", "RECEIVE_BOOT_COMPLETED",
     "VIBRATE", "WAKE_LOCK", "USE_FULL_SCREEN_INTENT", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
 ]
 p = "".join('    <uses-permission android:name="android.permission.%s"/>\n' % x for x in perms)
