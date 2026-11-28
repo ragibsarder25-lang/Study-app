@@ -20,7 +20,7 @@ import android.media.RingtoneManager
 import android.os.Build
 
 object Alarms {
-    const val CHANNEL = "study_alarm_native"
+    const val CHANNEL = "study_alarm_native_v2"
     private const val PREF = "native_alarms"
 
     private fun pending(ctx: Context, id: Int, title: String, body: String): PendingIntent {
