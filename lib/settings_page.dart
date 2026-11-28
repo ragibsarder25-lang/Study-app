@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'backup.dart';
+import 'cloud.dart';
 import 'core.dart';
 import 'extra.dart';
 import 'plan_ui.dart';
@@ -13,10 +14,25 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController intervals = TextEditingController(text: Prefs.intervals.join(', '));
+  final cloudUrl = TextEditingController();
+  final cloudToken = TextEditingController();
+  bool cloudBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Cloud.init().then((_) {
+      cloudUrl.text = Cloud.url;
+      cloudToken.text = Cloud.token;
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
     intervals.dispose();
+    cloudUrl.dispose();
+    cloudToken.dispose();
     super.dispose();
   }
 
@@ -57,6 +73,31 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (e) {
       _snack('Restore failed: $e');
     }
+  }
+
+  Future<void> _cloud(bool push) async {
+    if (cloudBusy) return;
+    Cloud.url = cloudUrl.text;
+    Cloud.token = cloudToken.text;
+    await Cloud.save();
+    if (!push) {
+      final ok = await confirmDialog(context, 'Download from cloud?',
+          'This replaces ALL current data on this phone with the cloud copy.', 'Download');
+      if (!ok) return;
+    }
+    setState(() => cloudBusy = true);
+    try {
+      if (push) {
+        await Cloud.push();
+      } else {
+        await Cloud.pull();
+        widget.onChanged();
+      }
+      _snack(push ? 'Uploaded to cloud' : 'Downloaded from cloud');
+    } catch (e) {
+      _snack('Cloud failed: $e');
+    }
+    if (mounted) setState(() => cloudBusy = false);
   }
 
   void _saveIntervals(String s) {
@@ -205,6 +246,43 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: const Text('Replaces everything currently in the app'),
             onTap: _restore,
           ),
+        ]),
+      ),
+      Panel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Cloud sync (Cloudflare)', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: cloudUrl,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(labelText: 'Worker URL', hintText: 'https://xxx.workers.dev', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: cloudToken,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Token', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+                child: FilledButton.icon(
+                    onPressed: cloudBusy ? null : () => _cloud(true),
+                    icon: const Icon(Icons.cloud_upload_outlined),
+                    label: const Text('Upload'))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: OutlinedButton.icon(
+                    onPressed: cloudBusy ? null : () => _cloud(false),
+                    icon: const Icon(Icons.cloud_download_outlined),
+                    label: const Text('Download'))),
+          ]),
+          if (Cloud.last.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('Last sync: ${Cloud.last.substring(0, 16).replaceAll('T', ' ')}',
+                  style: const TextStyle(fontSize: 12)),
+            ),
         ]),
       ),
       Panel(
